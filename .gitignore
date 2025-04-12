@@ -1,0 +1,68 @@
+# Python autogen
+__pycache__/
+*.py[cod]
+*.pyo
+.ipynb_checkpoints/
+
+# Configs
+.env
+.venv/
+env/
+venv/
+ENV/
+*.env
+
+# Logs
+*.log
+*.out
+
+# Cache
+*.pickle
+*.pkl
+*.joblib
+*.npz
+*.npy
+
+# Data
+data/
+datasets/
+experiments/
+logs/
+results/
+runs/  # folosit de TensorBoard
+
+# Models
+models/
+checkpoints/
+*.h5
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Configs
+.vscode/
+.idea/
+
+# Tests
+coverage.xml
+*.cover
+htmlcov/
+.cache/
+.tox/
+nosetests.xml
+test-results/
+
+# Builds
+build/
+dist/
+*.egg-info/
+
+# Docker
+docker-compose.override.yml
+*.dockerfile
+
+# Others
+*.tfrecord
+*.tar.gz
+*.zip

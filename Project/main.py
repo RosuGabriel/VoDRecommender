@@ -1,0 +1,50 @@
+#%%
+# Imports
+import random
+
+from envDef import VoDEnv
+from data import moviesIDs, user_rating_of_movie
+
+#%%
+# Env testing
+env = VoDEnv(maxSteps=1000, maxHistoryDim=20, currentUserId=4)
+state = env.reset() 
+
+print("Observație inițială:")
+print(state)
+
+#%%
+# Random agent
+def random_agent(userId: int = 0):
+    # Choose random movie to recommend
+    movieId = random.choice(moviesIDs)
+    
+    # Get user's rating
+    rating = user_rating_of_movie(userId, movieId)
+    
+    return movieId, rating
+
+#%%
+# Simulation
+for episode in range(1):
+    state = env.reset()
+    done = False
+    total_reward = 0
+    
+    while not done:
+        # Action from agent
+        action = random_agent()
+        
+        # Step with chosen action
+        next_state, reward, done, info = env.step(action)
+        
+        # Add reward to total reward
+        total_reward += reward
+        
+        # Print results
+        print(f"Recompensă: {reward:.2f}")
+        env.render()  # Afișează istoricul filmelor vizionate
+        
+    print(f"Total recompensă în episodul {episode+1}: {total_reward:.2f}")
+    print('------------------------------------------------------')
+print('------------------------------------------------------')

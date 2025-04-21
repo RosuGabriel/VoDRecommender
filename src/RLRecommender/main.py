@@ -3,11 +3,11 @@
 import random
 
 from envDef import VoDEnv
-from data import moviesIDs, user_rating_of_movie
+from ClassicRecommender.data import moviesIDs, user_rating_of_movie
 
 #%%
 # Env testing
-env = VoDEnv(maxSteps=1000, maxHistoryDim=20, currentUserId=4)
+env = VoDEnv(maxSteps=100, maxHistoryDim=20, currentUserId=4)
 state = env.reset() 
 
 print("Observație inițială:")

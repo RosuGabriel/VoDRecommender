@@ -3,7 +3,6 @@
 import gym
 from gym import spaces
 import numpy as np
-from ClassicRecommender.data import genres_of_movie, genres_to_vector
 
 #%%
 # Config

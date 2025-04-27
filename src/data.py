@@ -1,3 +1,4 @@
+#%%
 # Imports
 import pandas as pd
 import re
@@ -7,7 +8,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 # Constants
-MOVIE_LENS_PATH = "../../../Datasets/movie lens 2018/ml-latest-small/"
+MOVIE_LENS_PATH = "ml-latest-small/"
 ALL_GENRES = ["Action",
             "Adventure",
             "Animation",
@@ -26,6 +27,7 @@ ALL_GENRES = ["Action",
             "Thriller",
             "War",
             "Western"]
+
 
 # Functions
 def split_title_year(title):
@@ -49,16 +51,19 @@ class MovieLensData:
         if includeMyRatings:
             self.myRatings = self.add_my_ratings()
         else:
-            self.mergedDf = self.mergedRatingsWithFeatures()
-            self.utilityMatrix = self.calculate_utility_matrix()
+            self.mergeRatingsWithFeatures()
+            self.calculate_utility_matrix()
+
 
     def reset_data(self, includeMyRatings: bool = False):
         self.__init__(includeMyRatings)
+
 
     def add_my_ratings(self):
         myRatings = pd.read_csv(MOVIE_LENS_PATH + "my ratings.csv")
         self.add_ratings(myRatings)
         return myRatings
+
 
     def initialize_data(self):
         ratingsDf = pd.read_csv(MOVIE_LENS_PATH + "ratings.csv")   # userId, movieId (year), rating, timestamp
@@ -72,6 +77,7 @@ class MovieLensData:
         genresDf['genres'] = genresDf['genres'].apply(genres_to_vector)
         genresDf = pd.DataFrame(genresDf['genres'].tolist())
         moviesFeatures = pd.concat([moviesDf['movieId'], moviesDf['title'], moviesDf['year'], genresDf], axis=1)
+
         moviesFeatures.columns = ['movieId', 'title', 'year'] + ALL_GENRES
         # Normalize years
         scaler = StandardScaler()
@@ -83,16 +89,16 @@ class MovieLensData:
         titleFeatures = tfidf.fit_transform(moviesDf['title'])
 
         titleFeatures = pd.DataFrame(titleFeatures.toarray(), columns=tfidf.get_feature_names_out())
-        titleFeatures.columns = ['ttlFtr_' + col for col in tfidf.get_feature_names_out()]
+        titleFeatures.columns = [ col + ' in title' for col in tfidf.get_feature_names_out()]
         moviesFeatures = pd.concat([moviesFeatures.reset_index(drop=True), titleFeatures.reset_index(drop=True)], axis=1)
 
         return ratingsDf, moviesDf, moviesFeatures
 
-    def mergedRatingsWithFeatures(self):
-        mergedDf = pd.merge(self.ratingsDf, self.moviesFeatures, on='movieId', how='inner')
-        mergedDf.drop(columns=['timestamp'], inplace=True)
 
-        return mergedDf
+    def mergeRatingsWithFeatures(self):
+        self.mergedDf = pd.merge(self.ratingsDf, self.moviesFeatures, on='movieId', how='inner')
+        self.mergedDf.drop(columns=['timestamp'], inplace=True)
+
 
     def user_rating_of_movie(self, userId: int, movieId: int):
         filteredRatings = self.ratingsDf[(self.ratingsDf['userId'] == userId) & (self.ratingsDf['movieId'] == movieId)]
@@ -100,23 +106,28 @@ class MovieLensData:
             return None
         return filteredRatings['rating'].values[0]
 
+
     def genres_of_movie(self, movieId: int):
         filteredMovies = self.moviesDf[self.moviesDf['movieId'] == movieId]
         if filteredMovies.empty:
             return []
         return filteredMovies['genres'].values[0].split('|')
 
+
     def title_of_movie(self, movieId: int):
         filteredMovies = self.moviesDf[self.moviesDf['movieId'] == movieId]
         if filteredMovies.empty:
             return []
         return filteredMovies['title'].values[0]
-    
+
+
     def calculate_utility_matrix(self):
-        return self.ratingsDf.pivot_table(index='userId', columns='movieId', values='rating')
+        self.utilityMatrix = self.ratingsDf.pivot_table(index='userId', columns='movieId', values='rating')
+
 
     def data_sparsity(self):
         return (1.0 - (len(self.ratingsDf) / (len(self.utilityMatrix) * len(self.utilityMatrix.columns))))*100.0
+
 
     def remove_movies_with_less_than_k_ratings(self, k: int):
         filtered_movies = self.ratingsDf['movieId'].value_counts()
@@ -124,22 +135,25 @@ class MovieLensData:
         self.ratingsDf = self.ratingsDf[self.ratingsDf['movieId'].isin(movies_to_keep)]
         self.moviesDf = self.moviesDf[self.moviesDf['movieId'].isin(movies_to_keep)]
         self.mergedDf = self.mergedDf[self.mergedDf['movieId'].isin(movies_to_keep)]
-        self.utilityMatrix = self.calculate_utility_matrix()
+        self.calculate_utility_matrix()
+
 
     def user_ratings(self, userId: int):
         filteredRatings = self.ratingsDf[self.ratingsDf['userId'] == userId]
         if filteredRatings.empty:
             return []
         return filteredRatings[['movieId', 'rating']].values.tolist()
-    
+
+
     def movie_ratings(self, movieId: int):
         filteredRatings = self.ratingsDf[self.ratingsDf['movieId'] == movieId]
         if filteredRatings.empty:
             return []
         return filteredRatings[['userId', 'rating']].values.tolist()
     
+
     def add_ratings(self, newRatingsDf: pd.DataFrame):
         self.ratingsDf = pd.concat([self.ratingsDf, newRatingsDf], ignore_index=True)
         self.ratingsDf = self.ratingsDf.drop_duplicates(subset=['userId', 'movieId'], keep='first') # remove duplicates
-        self.mergedDf = self.mergedRatingsWithFeatures()
-        self.utilityMatrix = self.calculate_utility_matrix()
+        self.mergeRatingsWithFeatures()
+        self.calculate_utility_matrix()

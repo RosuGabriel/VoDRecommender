@@ -1,7 +1,6 @@
 #%%
 # Imports
 import random
-
 from envDef import VoDEnv
 from ClassicRecommender.data import moviesIDs, user_rating_of_movie
 
@@ -29,7 +28,7 @@ def random_agent(userId: int = 0):
 for episode in range(1):
     state = env.reset()
     done = False
-    total_reward = 0
+    totalReward = 0
     
     while not done:
         # Action from agent
@@ -39,12 +38,12 @@ for episode in range(1):
         next_state, reward, done, info = env.step(action)
         
         # Add reward to total reward
-        total_reward += reward
+        totalReward += reward
         
         # Print results
-        print(f"Recompensă: {reward:.2f}")
-        env.render()  # Afișează istoricul filmelor vizionate
+        print(f"Reward: {reward:.2f}")
+        env.render()  # Watch history
         
-    print(f"Total recompensă în episodul {episode+1}: {total_reward:.2f}")
+    print(f"Total reward in episode {episode+1}: {totalReward:.2f}")
     print('------------------------------------------------------')
 print('------------------------------------------------------')

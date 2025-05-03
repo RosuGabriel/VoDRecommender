@@ -66,3 +66,7 @@ docker-compose.override.yml
 *.tfrecord
 *.tar.gz
 *.zip
+
+# Models and extra data
+*.pkl
+"additional data/"

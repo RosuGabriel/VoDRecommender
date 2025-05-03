@@ -1,8 +1,8 @@
 #%%
 # Imports
-from data import MovieLensData
+from data_loader.data_movie_lens import MovieLensData
 import pandas as pd
-from hybridFiltering import HybridRecommender
+from recommenders.hybrid_filtering import HybridRecommender
 import time
 from sklearn.metrics import mean_squared_error
 import math
@@ -71,7 +71,6 @@ endTime = time.time()
 # Performance test
 totalRmse = 0
 rounds = 5
-print("disagreementPenalty: 0.7")
 for round in range(rounds):
     print(f"Round {round+1}")
     usersSample = random.sample(list(users), int(len(users)/40))
@@ -103,13 +102,14 @@ for round in range(rounds):
                 # print("Prediction:", pred)
                 predictions.append(pred)
                 trueRatings.append(user_group.iloc[idx]['rating'])
-            else:
-                print(f"WARNING: No prediction for User {user}, Movie {movie}")
+            # else:
+            #     print(f"WARNING: No prediction for User {user}, Movie {movie}")
 
     mse = mean_squared_error(trueRatings, predictions)
     rmse = math.sqrt(mse)
     print(f"RMSE: {rmse}")
     totalRmse += rmse
+
 
 print(f"\nAvg RMSE: {totalRmse/rounds}")
 endTime = time.time()

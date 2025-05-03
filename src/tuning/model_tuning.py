@@ -1,4 +1,4 @@
-from data import MovieLensData
+from data_loader.data_movie_lens import MovieLensData
 from surprise import Dataset, Reader, SVD, BaselineOnly, accuracy
 from surprise.model_selection import RandomizedSearchCV
 

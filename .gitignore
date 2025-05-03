@@ -24,7 +24,6 @@ ENV/
 *.npy
 
 # Data
-data/
 datasets/
 experiments/
 logs/
@@ -69,4 +68,4 @@ docker-compose.override.yml
 
 # Models and extra data
 *.pkl
-"additional data/"
+additional_data/

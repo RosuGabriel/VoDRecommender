@@ -31,12 +31,12 @@ ALL_GENRES = ["Action",
 
 # Functions
 def split_title_year(title):
-    match = re.match(r"^(.*) \((\d{4})\)$", title)
+    match = re.match(r"^(.*)\s\((\d{4})\)\s*$", title)
     if match:
         name, year = match.groups()
         return pd.Series([name, int(year)])
     else:
-        return pd.Series([title, None])  # fallback
+        return pd.Series([title, ])  # fallback
 
 def genres_to_vector(genres):
     return [1.0 if g in genres else 0.0 for g in ALL_GENRES]
@@ -45,20 +45,30 @@ def genres_to_vector(genres):
 
 # Data class for easier manipulation and recovery - this is the one intended to be imported
 class MovieLensData:
-    def __init__(self, includeMyRatings: bool = False):
-        self.ratingsDf = pd.read_csv(MOVIE_LENS_DIR + "ratings.csv")   # userId, movieId (year), rating, timestamp
-        self.moviesDf = pd.read_csv(MOVIE_LENS_DIR + "movies.csv")     # movieId, title, genres
+    def __init__(self, includeMyRatings: bool = False, includeEstimatedRatings: bool = False):
+        self.ratingsDf = pd.read_csv(MOVIE_LENS_DIR / "ratings.csv")   # userId, movieId, rating, timestamp
+
+        if includeEstimatedRatings:
+            estimatedRatings = pd.read_csv(ADDITIONAL_DIR / "hybridPredictedRatings.csv") # userId, movieId, rating
+            self.ratingsDf = pd.concat([self.ratingsDf, estimatedRatings], axis=0, ignore_index=True)
+            
+        self.ratingsDf.drop(['timestamp'], axis=1, inplace=True)
+
+        self.moviesDf = pd.read_csv(MOVIE_LENS_DIR / "movies.csv")     # movieId, title (year), genres
+        self.moviesDf = self.moviesDf[self.moviesDf['movieId'].isin(self.ratingsDf['movieId'])].dropna().reset_index(drop=True) # remove movies not rated by any user
+
         self.calculate_movie_features()
         self.allGenres = ALL_GENRES
-        if includeMyRatings:
-            self.myRatings = self.add_my_ratings()
-        else:
-            self.mergeRatingsWithFeatures()
-            self.calculate_utility_matrix()
+
+        if not includeEstimatedRatings:
+            if includeMyRatings:
+                self.myRatings = self.add_my_ratings()
+            else:
+                self.calculate_utility_matrix()
 
 
     def add_my_ratings(self):
-        myRatings = pd.read_csv(ADDITIONAL_DIR + "myRatings.csv")
+        myRatings = pd.read_csv(ADDITIONAL_DIR / "myRatings.csv")
         self.add_ratings(myRatings)
         return myRatings
 
@@ -87,18 +97,15 @@ class MovieLensData:
         titleFeatures = pd.DataFrame(titleFeatures.toarray(), columns=tfidf.get_feature_names_out())
         titleFeatures.columns = [ col + ' in title' for col in tfidf.get_feature_names_out()]
         moviesFeatures = pd.concat([moviesFeatures.reset_index(drop=True), titleFeatures.reset_index(drop=True)], axis=1)
+        moviesFeatures.loc[moviesFeatures['yearScaled'].isna(), 'yearScaled'] = 0
         
         self.moviesFeatures = moviesFeatures
 
 
-    def mergeRatingsWithFeatures(self):
-        self.mergedDf = pd.merge(self.ratingsDf, self.moviesFeatures, on='movieId', how='inner')
-        self.mergedDf.drop(columns=['timestamp'], inplace=True)
-
-
     def calculate_user_profile(self, userId: int, showUserRatings: bool=False, genresWeights: list=[1], yearWeight: float=1, ratingsWeights: list=[1.3, 1, 0.7, -1, -2], titleWeight: float=1):
         # Get liked movies of a specific user
-        userRatings = self.mergedDf[self.mergedDf['userId'] == userId].dropna().copy()
+        userRatings = self.user_ratings_with_movie_features(userId=userId)
+
         if showUserRatings:
             print(f"User {userId} ratings:")
             print(userRatings[['movieId', 'title', 'rating', 'year']])
@@ -139,9 +146,20 @@ class MovieLensData:
         # Add weights to features
         userProfile[1] *= yearWeight
         userProfile[2:20] = np.array(userProfile[2:20]) * genresWeights
+
+        if not titleWeight:
+            return userProfile[:20]
+
         userProfile[20:] =  np.array(userProfile[20:]) * titleWeight
 
         return userProfile
+    
+
+    def get_movie_features(self, movieId: int):
+        filteredMovies = self.moviesFeatures[self.moviesFeatures['movieId'] == movieId].drop(['movieId', 'title', 'year'], axis=1)
+        if filteredMovies.empty:
+            return None
+        return filteredMovies.values[0]
 
 
     def calculate_all_user_profiles(self, genresWeights: list=[1], yearWeight: float=1, ratingsWeights: list=[1.3, 1, 0.7, -1, -2], titleWeight: float=1, saveToCSV: bool=False):
@@ -154,13 +172,13 @@ class MovieLensData:
         userProfilesDf = pd.DataFrame(userProfiles, columns=['userId'] + ['yearScaled'] + self.moviesFeatures.columns[4:].tolist())
         
         if saveToCSV:
-            userProfilesDf.to_csv(ADDITIONAL_DIR+'userProfiles.csv', index=False)
+            userProfilesDf.to_csv(ADDITIONAL_DIR / 'userProfiles.csv', index=False)
         
         return userProfilesDf
 
 
-    def get_user_profile_from_csv(userId: int):
-        userProfilesDf = pd.read_csv(ADDITIONAL_DIR+'userProfiles.csv')
+    def get_user_profile_from_csv(self, userId: int):
+        userProfilesDf = pd.read_csv(ADDITIONAL_DIR / 'userProfiles.csv')
         userProfile = userProfilesDf[userProfilesDf['userId'] == userId].values[0]
         
         return userProfile
@@ -201,16 +219,20 @@ class MovieLensData:
         movies_to_keep = filtered_movies[filtered_movies >= k].index
         self.ratingsDf = self.ratingsDf[self.ratingsDf['movieId'].isin(movies_to_keep)]
         self.moviesDf = self.moviesDf[self.moviesDf['movieId'].isin(movies_to_keep)]
-        self.mergedDf = self.mergedDf[self.mergedDf['movieId'].isin(movies_to_keep)]
         self.calculate_utility_matrix()
 
 
+    def user_ratings_with_movie_features(self, userId: int):
+        userRatings = self.user_ratings(userId=userId).copy()
+        return pd.merge(userRatings, self.moviesFeatures, on='movieId', how='inner').dropna()
+
+
     def user_ratings(self, userId: int):
-        return self.mergedDf[self.mergedDf['userId'] == userId]
+        return self.ratingsDf[self.ratingsDf['userId'] == userId]
 
 
     def movie_ratings(self, movieId: int):
-        return self.mergedDf[self.mergedDf['movieId'] == movieId]
+        return self.ratingsDf[self.ratingsDf['movieId'] == movieId]
     
 
     @property
@@ -221,5 +243,4 @@ class MovieLensData:
     def add_ratings(self, newRatingsDf: pd.DataFrame):
         self.ratingsDf = pd.concat([self.ratingsDf, newRatingsDf], ignore_index=True)
         self.ratingsDf = self.ratingsDf.drop_duplicates(subset=['userId', 'movieId'], keep='first') # remove duplicates
-        self.mergeRatingsWithFeatures()
         self.calculate_utility_matrix()

@@ -1,6 +1,6 @@
 #%%
 # Imports
-from data_loader.data_movie_lens import MovieLensData
+from data_loader.movie_lens_data import MovieLensData
 from surprise import Dataset, Reader, SVD
 import joblib
 from utils.paths import MODELS_DIR
@@ -26,7 +26,7 @@ def train_recommender(data: MovieLensData, model, newModelName: str=None):
     # Model training
     model.fit(trainset)
     if newModelName is not None:
-        joblib.dump(model, f"{MODELS_DIR}+{newModelName}.pkl")
+        joblib.dump(model, MODELS_DIR / f"{newModelName}.pkl")
 
     return model
 
@@ -34,7 +34,7 @@ def train_recommender(data: MovieLensData, model, newModelName: str=None):
 def import_model(modelName: str='SVD model'):
     if modelName is None:
         modelName = 'SVD model'
-    return joblib.load(f"{MODELS_DIR}+{modelName}.pkl")
+    return joblib.load(MODELS_DIR / f"{modelName}.pkl")
 
 
 def _predict_rating(row, model, userId: int):
@@ -42,7 +42,7 @@ def _predict_rating(row, model, userId: int):
 
 
 def get_recommendations(data: MovieLensData, userId: int, model, recomandationsNum: int=-1):
-    userRatings = data.mergedDf[data.mergedDf['userId'] == userId].dropna()
+    userRatings = data.user_ratings(userId=userId).copy()
 
     notWatchedMovies = data.moviesFeatures[~data.moviesFeatures['movieId'].isin(userRatings['movieId'])].dropna() # "~" is the negation operator for a boolean mask
     notWatchedMovies['predictedRatingCF'] = notWatchedMovies.apply(lambda row: _predict_rating(row=row, model=model, userId=userId), axis=1)

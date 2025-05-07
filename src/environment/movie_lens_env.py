@@ -1,21 +1,29 @@
-#%%
 # Imports
-from data_loader.data_movie_lens import MovieLensData
+from data_loader.movie_lens_data import MovieLensData
 import gym
 import numpy as np
 import random
 
 
 
-#%%
 # Env definition
 class MovieLensEnv(gym.Env):
-    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100):
+    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100, repeatUsers=False, showInitialDetails=False):
         super(MovieLensEnv, self).__init__()
         self.data = data
+        self.repeatUsers = repeatUsers
+        self.storedUserEmbveddings = {}
         self.maxSteps = maxSteps
+        self.reward_range = (-1.0*maxSteps, 1.0*maxSteps)
         self.availableUsers = list(self.data.all_users.copy())
+
+        if showInitialDetails:
+            print(f"Available users: {len(self.availableUsers)}")
+            print(f"Movies: {len(self.data.moviesDf)}")
+            print(f"Ratings: {len(self.data.ratingsDf)}")
+            
         self.reset()
+        
         self.action_space = gym.spaces.Discrete(len(self.data.moviesDf))
         self.observation_space = gym.spaces.Box(low=-5, high=5, shape=self.userEmbedding.shape, dtype=np.float32) # approximative range of values
 
@@ -29,8 +37,9 @@ class MovieLensEnv(gym.Env):
 
 
     # The action is the index of the movie in the moviesDf
-    def step(self, action):
+    def step(self, action, updateFactor=0.1):
         self.stepCount += 1
+
         movie_id = self.data.moviesDf.iloc[action]['movieId']
         
         rating_row = self.userRatings[self.userRatings['movieId'] == movie_id]
@@ -39,14 +48,23 @@ class MovieLensEnv(gym.Env):
         else:
             reward = self._rating_to_reward(rating_row['rating'].values[0])
 
+        movieFeatures = np.array(self.data.get_movie_features(movie_id)[:19])
+        
+        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures*updateFactor
+        self.storedUserEmbveddings[self.userId] = self.userEmbedding
+        
+        # print('user',self.userEmbedding)
+        # print('movie',movieFeatures)
+        
         done = self.stepCount >= self.maxSteps
-        info = {"movieFeatures": self.data.moviesFeatures[self.data.moviesFeatures['movieId'] == movie_id]}
+        info = {"movieFeatures": movieFeatures}
 
         return self.userEmbedding, reward, done, info
 
 
     def render(self, mode='human'):
         print(f"User ID: {self.userId}")
+        print(f"User embedding: {self.userEmbedding}")
     
 
     # New user is chosen randomly
@@ -56,12 +74,20 @@ class MovieLensEnv(gym.Env):
             self.availableUsers = list(self.data.all_users.copy())
 
         self.userId = random.choice(self.availableUsers)
-        self.availableUsers.remove(self.userId)
         
-        self.userEmbedding = np.array(self.data.calculate_user_profile(self.userId)[1:].copy())
+        if not self.repeatUsers:
+            self.availableUsers.remove(self.userId)
+
+        if self.userId in self.storedUserEmbveddings:
+            self.userEmbedding = self.storedUserEmbveddings[self.userId]
+        else:
+            self.userEmbedding = np.array(self.data.get_user_profile_from_csv(self.userId)[1:20])
+            self.storedUserEmbveddings[self.userId] = self.userEmbedding
+        
         self.userRatings = self.data.user_ratings(self.userId).copy()
        
 
+    # Function to map rating to reward
     def _rating_to_reward(self, rating: float):
         if rating >= 4.5:
             return 1.0

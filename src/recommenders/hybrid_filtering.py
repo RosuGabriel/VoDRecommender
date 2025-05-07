@@ -1,7 +1,7 @@
 # Imports
-from data_loader.data_movie_lens import MovieLensData
-from content_based_filtering import get_recommendations as content_based_recommender
-from collaborative_filtering import train_recommender, import_model, get_recommendations as collaborative_recommender
+from data_loader.movie_lens_data import MovieLensData
+from recommenders.content_based_filtering import get_recommendations as content_based_recommender
+from recommenders.collaborative_filtering import train_recommender, import_model, get_recommendations as collaborative_recommender
 import pandas as pd
 from surprise import SVD
 from sklearn.preprocessing import MinMaxScaler

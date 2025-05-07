@@ -68,4 +68,5 @@ docker-compose.override.yml
 
 # Models and extra data
 *.pkl
+tmp/
 additional_data/

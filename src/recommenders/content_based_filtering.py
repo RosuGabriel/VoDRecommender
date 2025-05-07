@@ -1,6 +1,6 @@
 #%%
 # Imports
-from data_loader.data_movie_lens import MovieLensData
+from data_loader.movie_lens_data import MovieLensData
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import MinMaxScaler
 

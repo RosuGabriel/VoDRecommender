@@ -3,10 +3,10 @@ from utils.paths import BASE_DIR
 
 
 
-class ModifiedActorCritic(nn.Module):
+class PActorCriticNet(nn.Module):
     def __init__(self, pretrainedActor, newInDim=19, newActionsNum=2,
                  name='prtr_actor_critic', checkpointDir=BASE_DIR / "tmp/actor critic"):
-        super(ModifiedActorCritic, self).__init__()
+        super(PActorCriticNet, self).__init__()
         self.name = name
         self.checkpointDir = checkpointDir
         self.checkpointFile = self.checkpointDir / (name + '.pt')
@@ -28,6 +28,7 @@ class ModifiedActorCritic(nn.Module):
 
         # Add a critic
         self.v = nn.Linear(pretrainedActor.action_layer_2.out_features, 1)
+
 
     def forward(self, state):
         if self.input_adapter:

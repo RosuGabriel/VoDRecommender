@@ -3,10 +3,10 @@ from utils.paths import BASE_DIR
 
 
 
-class ActorCriticNetwork(nn.Module):
+class ActorCriticNet(nn.Module):
     def __init__(self, actionsNum, inDim=19, fc1Dims=1024, fc2Dims=512,
                  name='actor_critic', checkpointDir=BASE_DIR / "tmp/actor critic"):
-        super(ActorCriticNetwork, self).__init__()
+        super(ActorCriticNet, self).__init__()
         self.model_name = name
         self.checkpointDir = checkpointDir
         self.checkpointFile = self.checkpointDir / (name + '.pt')

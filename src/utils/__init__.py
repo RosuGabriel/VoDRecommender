@@ -1,11 +1,14 @@
 import os
 import csv
-from utils.paths import ADDITIONAL_DIR
+from utils.paths import ADDITIONAL_DIR, BASE_DIR
 
 
 
 os.makedirs(ADDITIONAL_DIR, exist_ok=True)
 os.makedirs(ADDITIONAL_DIR / "models/", exist_ok=True)
+os.makedirs(BASE_DIR / "tmp/", exist_ok=True)
+os.makedirs(BASE_DIR / "tmp/actor critic", exist_ok=True)
+
 
 myRatingsPath = ADDITIONAL_DIR / "myRatings.csv"
 if not os.path.exists(myRatingsPath):

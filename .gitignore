@@ -28,10 +28,9 @@ datasets/
 experiments/
 logs/
 results/
-runs/  # folosit de TensorBoard
+runs/
 
 # Models
-models/
 checkpoints/
 *.h5
 *.pt
@@ -69,4 +68,6 @@ docker-compose.override.yml
 # Models and extra data
 *.pkl
 tmp/
+
+# Data too large to be in the repo
 additional_data/

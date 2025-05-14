@@ -3,15 +3,13 @@ from utils.paths import BASE_DIR
 
 
 
-class ModifiedActorCritic2(nn.Module):
+class PActorPCriticNet(nn.Module):
     def __init__(self, pretrainedActor, pretrainedCritic, newInDim: int, newActionsNum: int,
                  name='prtr_actor_critic', checkpointDir=BASE_DIR / "tmp/actor critic"):
-        super(ModifiedActorCritic2, self).__init__()
+        super(PActorPCriticNet, self).__init__()
         self.name = name
         self.checkpointDir = checkpointDir
         self.checkpointFile = self.checkpointDir / (name + '.pt')
-        print("newInDim: ", newInDim)
-        print("newActionsNum: ", newActionsNum)
 
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(p=0.5)
@@ -38,6 +36,7 @@ class ModifiedActorCritic2(nn.Module):
         # Critic network
         self.critic = pretrainedCritic  # input state + action
 
+
     def forward(self, state, action=None):
         # Adapt actor input
         if self.a_input_adapter:
@@ -61,9 +60,6 @@ class ModifiedActorCritic2(nn.Module):
         v = None
         if action is None:
             action = pi
-
-        print("state shape: ", state.shape)
-        print("action shape: ", action.shape if action is not None else None)
 
         if len(state.shape) == 1:
             state = state.unsqueeze(0)

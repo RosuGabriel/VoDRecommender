@@ -12,9 +12,9 @@ class MovieLensEnv(gym.Env):
         super(MovieLensEnv, self).__init__()
         self.data = data
         self.repeatUsers = repeatUsers
-        self.storedUserEmbveddings = {}
+        self.userEmbeddings = data.get_all_user_profiles_from_csv()
         self.maxSteps = maxSteps
-        self.reward_range = (-1.0*maxSteps, 1.0*maxSteps)
+        self.reward_range = (-1.0, 1.0)
         self.availableUsers = list(self.data.all_users.copy())
 
         if showInitialDetails:
@@ -37,7 +37,7 @@ class MovieLensEnv(gym.Env):
 
 
     # The action is the index of the movie in the moviesDf
-    def step(self, action, updateFactor=0.1):
+    def step(self, action, updateFactor=0.2):
         self.stepCount += 1
 
         movie_id = self.data.moviesDf.iloc[action]['movieId']
@@ -50,8 +50,7 @@ class MovieLensEnv(gym.Env):
 
         movieFeatures = np.array(self.data.get_movie_features(movie_id)[:19])
         
-        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures*updateFactor
-        self.storedUserEmbveddings[self.userId] = self.userEmbedding
+        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures*updateFactor*reward
         
         # print('user',self.userEmbedding)
         # print('movie',movieFeatures)
@@ -78,12 +77,7 @@ class MovieLensEnv(gym.Env):
         if not self.repeatUsers:
             self.availableUsers.remove(self.userId)
 
-        if self.userId in self.storedUserEmbveddings:
-            self.userEmbedding = self.storedUserEmbveddings[self.userId]
-        else:
-            self.userEmbedding = np.array(self.data.get_user_profile_from_csv(self.userId)[1:20])
-            self.storedUserEmbveddings[self.userId] = self.userEmbedding
-        
+        self.userEmbedding = self.userEmbeddings[self.userEmbeddings['userId'] == self.userId].values[0][1:20]
         self.userRatings = self.data.user_ratings(self.userId).copy()
        
 
@@ -92,9 +86,9 @@ class MovieLensEnv(gym.Env):
         if rating >= 4.5:
             return 1.0
         elif rating >= 4:
-            return 0.7
+            return 0.8
         elif rating >= 3:
-            return 0.4
+            return 0.0
         elif rating >= 2:
             return -0.5
         return -1.0

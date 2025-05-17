@@ -6,32 +6,33 @@ from actor_critic.PActorCriticNet import PActorCriticNet
 from actor_critic.PActorPCriticNet import PActorPCriticNet
 import matplotlib.pyplot as plt
 import numpy as np
+import random
+from collections import deque
 
 
 
 class Agent:
-    def __init__(self, alpha=0.0003, gamma=0.99, actionsNum=2, device=None, pretrainedActor=None, pretrainedCritic=None):
+    def __init__(self, alpha=0.0003, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None, pretrainedCritic=None, batchSize=32):
         self.gamma = gamma
         self.actionsNum = actionsNum
         self.action = None
-        self.prevAction = None
-        self.batch = []
+        self.batch = deque(maxlen=batchSize)
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        self.actorLosses = []
-        self.criticLosses = []
-        self.totalLosses = []
-        self.deltas = []
-        self.actions = []
-        self.batchActions = []
-        self.rewards = []
-        self.avgRatings = []
-        self.stateValues = []
+        self.actorLossHistory = []
+        self.criticLossHistory = []
+        self.totalLossHistory = []
+        self.deltaHistory = []
+        self.actionHistory = []
+        self.rewardHistory = []
+        self.avgRatingHistory = []
+        self.stateValueHistory = []
+        self.entropyHistory = []
 
         if pretrainedActor and pretrainedCritic:
-            self.actorCritic = PActorPCriticNet(pretrainedActor, pretrainedCritic, newInDim=19, newActionsNum=actionsNum).to(self.device)
+            self.actorCritic = PActorPCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
         elif pretrainedActor:
-            self.actorCritic = PActorCriticNet(pretrainedActor, newInDim=19, newActionsNum=actionsNum).to(self.device)
+            self.actorCritic = PActorCriticNet(pretrainedActor, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
         else:
             self.actorCritic = ActorCriticNet(actionsNum=actionsNum).to(self.device)
         
@@ -48,7 +49,7 @@ class Agent:
 
         self.action = action
         
-        self.actions.append(action.item())
+        self.actionHistory.append(action.item())
 
         return action.item()
     
@@ -70,46 +71,49 @@ class Agent:
         logProb = dist.log_prob(self.action)
         entropy = dist.entropy()
 
-        if self.prevAction == self.action:
+        if self.action in self.actionHistory[:-10]:
             reward += torch.tensor(-0.5, dtype=torch.float32).to(self.device)
         
-        self.prevAction = self.action
-
         delta = reward + self.gamma * newStateValue * (1 - int(done)) - currentStateValue
 
-        actorLoss = -logProb * delta - entropyCoef * entropy
+        actorLoss = -logProb * delta
         criticLoss = delta ** 2
-        totalLoss = actorLoss + criticLoss
+        totalLoss = actorLoss + criticLoss - entropyCoef * entropy
 
         totalLoss.backward()
         self.optimizer.step()
 
-        self.actorLosses.append(actorLoss.item())
-        self.criticLosses.append(criticLoss.item())
-        self.totalLosses.append(totalLoss.item())
-        self.deltas.append(delta.item())
-        self.rewards.append(reward.item())
-        self.stateValues.append(currentStateValue.item())
+        self.actorLossHistory.append(actorLoss.item())
+        self.criticLossHistory.append(criticLoss.item())
+        self.totalLossHistory.append(totalLoss.item())
+        self.deltaHistory.append(delta.item())
+        self.rewardHistory.append(reward.item())
+        self.stateValueHistory.append(currentStateValue.item())
 
     
     def add_to_batch(self, currentState, action, reward, newState, done):
-        if self.prevAction == action:
-            reward += -0.5
         self.batch.append((currentState, action, reward, newState, done))
-        self.prevAction = action
 
     
-    def learn_from_batch(self, entropyCoef=0.01):
+    def learn_from_batch(self, entropyCoef=0.01, batchSize=32):
         if len(self.batch) == 0:
             return
         
-        currentStates, actions, rewards, newStates, dones = zip(*self.batch)
+        sampledBatch = random.sample(self.batch, min(batchSize, len(self.batch)))
+        
+        currentStates, actions, rewards, newStates, dones = zip(*sampledBatch)
 
-        currentStates = torch.tensor(currentStates, dtype=torch.float32).to(self.device)
-        actions = torch.tensor(actions, dtype=torch.long).to(self.device)
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        newStates = torch.tensor(newStates, dtype=torch.float32).to(self.device)
-        dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
+        currentStates = np.array(currentStates) 
+        actions = np.array(actions)
+        rewards = np.array(rewards)
+        newStates = np.array(newStates)
+        dones = np.array(dones)
+
+        currentStates = torch.from_numpy(currentStates).float().to(self.device)
+        actions = torch.from_numpy(actions).int().to(self.device)
+        rewards = torch.from_numpy(rewards).float().to(self.device)
+        newStates = torch.from_numpy(newStates).float().to(self.device)
+        dones = torch.from_numpy(dones).int().to(self.device)
         
         self.optimizer.zero_grad()
 
@@ -130,23 +134,23 @@ class Agent:
         delta = targets - currentStateValues
 
         # Losses
-        actorLoss = -logProbs * delta.detach() - entropyCoef * entropy
+        actorLoss = -logProbs * delta.detach()
         criticLoss = delta ** 2
 
         # Backward
-        totalLoss = (actorLoss + criticLoss).mean()
+        minEntropy = 2
+        entropyBonus = torch.clamp(entropy, max=minEntropy)
+        totalLoss = (actorLoss + criticLoss).mean() - entropyCoef * entropyBonus
         totalLoss.backward()
         self.optimizer.step()
 
-        self.batch = []
-
-        self.actorLosses.append(actorLoss.mean().item())
-        self.criticLosses.append(criticLoss.mean().item())
-        self.totalLosses.append(totalLoss.item())
-        self.deltas.append(delta.mean().item())
-        self.rewards.append(rewards.mean().item())
-        self.stateValues.append(currentStateValues.mean().item())
-        self.batchActions.append(actions.float().mean().item())
+        self.actorLossHistory.append(actorLoss.mean().item())
+        self.criticLossHistory.append(criticLoss.mean().item())
+        self.totalLossHistory.append(totalLoss.item())
+        self.deltaHistory.append(delta.mean().item())
+        self.rewardHistory.append(rewards.mean().item())
+        self.stateValueHistory.append(currentStateValues.mean().item())
+        self.entropyHistory.append(entropy.item())
 
     
     def save_models(self, fileName: str=None):
@@ -167,14 +171,15 @@ class Agent:
         
     def plot_all(self, avgScores=[], saveName=None, startSlice=0, endSlice=None):
         plotData = [
-        ("Actor Loss", self.actorLosses, 'orange', None, '-'),
-        ("Critic Loss", self.criticLosses, 'steelblue', None, '-'),
-        ("Total Loss", self.totalLosses, 'mediumpurple', None, '-'),
-        ("Delta", self.deltas, 'saddlebrown', None, '-'),
-        ("Avgerage Score", avgScores, 'olivedrab', None, '-'),
-        ("State Values", self.stateValues, 'darkblue', None, '-'),
-        ("Rewards", self.rewards, 'slategray', '.', ''),
-        ("Actions", self.actions, 'crimson', '.', '')
+        ("Actor Loss", self.actorLossHistory, 'orange', None, '-'),
+        ("Critic Loss", self.criticLossHistory, 'steelblue', None, '-'),
+        ("Total Loss", self.totalLossHistory, 'mediumpurple', None, '-'),
+        ("Delta", self.deltaHistory, 'saddlebrown', None, '-'),
+        ("Avgerage Reward", avgScores, 'olivedrab', None, '-'),
+        ("State Values", self.stateValueHistory, 'darkblue', None, '-'),
+        #("Rewards", self.rewardHistory, 'slategray', '.', ''),
+        ("Actions", self.actionHistory, 'crimson', '.', ''),
+        ("Entropy", self.entropyHistory, 'darkorange', None, '-'),
         ]
 
         n = len(plotData)
@@ -188,7 +193,7 @@ class Agent:
             step = int(str(len(values))[:-3]) if len(values) > 1000 else 1
             axes[i].plot(values[startSlice:endSlice:step], label=title, color=color, marker=marker, linestyle=linestyle)
             axes[i].set_title(f"{title}")
-            axes[i].set_xlabel("Episodes") if title != "Actions" else axes[i].set_xlabel("Steps")
+            axes[i].set_xlabel("Batches") if title != "Actions" else axes[i].set_xlabel("Steps")
             axes[i].set_xlim()
             axes[i].set_ylabel("Value")
             axes[i].grid(True)

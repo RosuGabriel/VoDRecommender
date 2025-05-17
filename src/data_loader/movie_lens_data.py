@@ -184,6 +184,12 @@ class MovieLensData:
         return userProfile
 
 
+    def get_all_user_profiles_from_csv(self):
+        userProfilesDf = pd.read_csv(ADDITIONAL_DIR / 'userProfiles.csv')
+        
+        return userProfilesDf
+
+
     def user_rating_of_movie(self, userId: int, movieId: int):
         filteredRatings = self.ratingsDf[(self.ratingsDf['userId'] == userId) & (self.ratingsDf['movieId'] == movieId)]
         if filteredRatings.empty:

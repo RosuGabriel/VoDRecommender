@@ -39,12 +39,17 @@ class Agent:
         self.optimizer = optim.Adam(self.actorCritic.parameters(), lr=alpha)
 
 
-    def choose_action(self, observation):
+    def choose_action(self, observation, temperature=1.0):
         state = torch.tensor(observation, dtype=torch.float32).to(self.device)
         
         _, probs = self.actorCritic(state)
 
-        dist = Categorical(probs)
+        logits = torch.log(probs + 1e-8)  # avoiding log(0)
+        # Temperature > 1.0 more exploration
+        # Temperature < 1.0 more exploitation
+        scaledLogits = logits / temperature # apply temperature
+
+        dist = Categorical(logits=scaledLogits)
         action = dist.sample()
 
         self.action = action
@@ -54,48 +59,11 @@ class Agent:
         return action.item()
     
 
-    def learn(self, currentState, reward, newState, done, entropyCoef = 0.01):
-        currentState = torch.tensor(currentState, dtype=torch.float32).to(self.device)
-        newState = torch.tensor(newState, dtype=torch.float32).to(self.device)
-        reward = torch.tensor(reward, dtype=torch.float32).to(self.device)
-
-        self.optimizer.zero_grad()
-
-        currentStateValue, probs = self.actorCritic(currentState)
-        newStateValue, _ = self.actorCritic(newState)
-
-        currentStateValue = currentStateValue.squeeze()
-        newStateValue = newStateValue.squeeze().detach()
-
-        dist = Categorical(probs)
-        logProb = dist.log_prob(self.action)
-        entropy = dist.entropy()
-
-        if self.action in self.actionHistory[:-10]:
-            reward += torch.tensor(-0.5, dtype=torch.float32).to(self.device)
-        
-        delta = reward + self.gamma * newStateValue * (1 - int(done)) - currentStateValue
-
-        actorLoss = -logProb * delta
-        criticLoss = delta ** 2
-        totalLoss = actorLoss + criticLoss - entropyCoef * entropy
-
-        totalLoss.backward()
-        self.optimizer.step()
-
-        self.actorLossHistory.append(actorLoss.item())
-        self.criticLossHistory.append(criticLoss.item())
-        self.totalLossHistory.append(totalLoss.item())
-        self.deltaHistory.append(delta.item())
-        self.rewardHistory.append(reward.item())
-        self.stateValueHistory.append(currentStateValue.item())
-
-    
     def add_to_batch(self, currentState, action, reward, newState, done):
         self.batch.append((currentState, action, reward, newState, done))
 
     
-    def learn_from_batch(self, entropyCoef=0.01, batchSize=32):
+    def learn(self, entropyCoef=0.01, batchSize=32, minEntropy=0.01):
         if len(self.batch) == 0:
             return
         
@@ -114,6 +82,8 @@ class Agent:
         rewards = torch.from_numpy(rewards).float().to(self.device)
         newStates = torch.from_numpy(newStates).float().to(self.device)
         dones = torch.from_numpy(dones).int().to(self.device)
+
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
         
         self.optimizer.zero_grad()
 
@@ -131,14 +101,13 @@ class Agent:
 
         # Calculate targets
         targets = rewards + self.gamma * newStateValues * (1 - dones)
-        delta = targets - currentStateValues
+        delta = torch.clamp(targets - currentStateValues, -1, 1)
 
         # Losses
         actorLoss = -logProbs * delta.detach()
         criticLoss = delta ** 2
 
         # Backward
-        minEntropy = 2
         entropyBonus = torch.clamp(entropy, max=minEntropy)
         totalLoss = (actorLoss + criticLoss).mean() - entropyCoef * entropyBonus
         totalLoss.backward()

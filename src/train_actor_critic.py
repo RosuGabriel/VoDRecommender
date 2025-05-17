@@ -13,14 +13,18 @@ from utils.paths import BASE_DIR
 #%% 
 # Parameters
 steps = 3 # recommendations per user
-episodes = 611*6 # number of users getting recommendations
-alpha = 0.0001 # learning rate
+episodes = 611 # number of users getting recommendations
+alpha = 0.0008 # learning rate
 gamma = 0.99 # discount factor
-entropyCoef = 0.05 # entropy coefficient
-device = torch.device('cuda') # device to use for learning (cuda or cpu)
+entropyCoef = 0.2 # entropy coefficient
+device = torch.device('cpu') # device to use for learning (cuda or cpu)
 network = 'papc' # ac | pac | papc  <=>  p = pretrained | a = actor | c = critic
 bufferSize = 128 # training batch size -> steps size means training after each episode
-batchSize = bufferSize * 3
+batchSize = int(bufferSize * 3) # the total batch size for sampling
+minEntropy = 2 # minimum entropy for the policy
+repeatUsers = True # repeat users in env or remove once used
+temperature = 1.15 # temperature for exploration/exploitation
+repeatedActionPenalty = 0.0 # penalty for repeated actions
 
 
 #%% 
@@ -30,7 +34,7 @@ data = MovieLensData(includeEstimatedRatings=True)
 
 #%%
 # Create environment
-env = MovieLensEnv(maxSteps=steps, data=data, repeatUsers=False)
+env = MovieLensEnv(maxSteps=steps, data=data, repeatUsers=repeatUsers)
 
 
 #%%
@@ -47,7 +51,6 @@ else:
         pretrainedCriticModel = torch.load(BASE_DIR / f"models/pretrained/{criticModelName}")
         agent = Agent(alpha=alpha, gamma=gamma, actionsNum=env.action_space.n, observationDim=env.observation_space.shape[0], device=device, batchSize=batchSize, pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel)
 
-# agent.load_models()
 
 #%%
 # Reset scores
@@ -57,54 +60,11 @@ avgScores = []
 
 
 #%%
-# Train functions
-def train_agent():
-    loadCheckpoint = False
-
-    if loadCheckpoint:
-        agent.load_models()
-
-    startTime = time.time()
-
-    for i in range(episodes):
-        observation, obsInfo = env.reset()
-
-        done = False
-        score = 0
-        
-        while not done:
-            action = agent.choose_action(observation)
-            
-            newObservation, reward, done, info = env.step(action)
-            score += reward
-            if not loadCheckpoint:
-                agent.learn(observation, reward, newObservation, done, entropyCoef=entropyCoef)
-            observation = newObservation
-
-        score = score / steps
-
-        scoreHistory.append(score)
-        avgScore = np.mean(scoreHistory[-100:])
-        avgScores.append(avgScore)
-
-        if avgScore > bestScore:
-            bestScore = avgScore
-            if not loadCheckpoint:
-                agent.save_models(fileName=f"{network}_{steps}_{episodes}_{alpha}_{gamma}")
-
-        print(f"Episode {i}\tScore: {score:.2f}\tAvg score: {avgScore:.2f}")
-
-    endTime = time.time()
-    print(f"Execution time: {endTime - startTime:.2f} seconds")
-    print(f"Best score: {bestScore:.2f}")
-
-    return avgScores
-
-
-def train_agent_with_batches(bestScore=-1):
+# Train function
+def train(bestScore=-1, temperature=1.0):
     startTime = time.time()
     episode = 0
-
+   
     for _ in range(episodes):
         observation, obsInfo = env.reset()
         
@@ -112,33 +72,34 @@ def train_agent_with_batches(bestScore=-1):
         score = 0
         
         while not done:
-            action = agent.choose_action(observation)
+            action = agent.choose_action(observation, temperature=temperature)
             
             newObservation, reward, done, info = env.step(action)
             
             # Penalty for repeating actions
-            frequency = agent.actionHistory[:-steps*5].count(action)
-            reward = max(reward - 0.05*frequency, -1.0)
+            frequency = agent.actionHistory[:-steps].count(action)
+            reward = max(reward - repeatedActionPenalty*frequency, -1.0)
             
             score += reward
             agent.add_to_batch(observation, action, reward, newObservation, done)
             observation = newObservation
+            
+        if len(agent.batch) >= bufferSize:
+            episode += 1
 
-        #if len(agent.batch) >= bufferSize:
-        agent.learn_from_batch(entropyCoef=entropyCoef)
+            agent.learn(entropyCoef=entropyCoef, minEntropy=minEntropy, batchSize=bufferSize)
 
-        score = score / steps
+            score = score / steps
 
-        scoreHistory.append(score)
-        avgScore = np.mean(scoreHistory[-100:])
-        avgScores.append(avgScore)
+            scoreHistory.append(score)
+            avgScore = np.mean(scoreHistory[-100:])
+            avgScores.append(avgScore)
 
-        if avgScore > bestScore and episode > 100:
-            bestScore = avgScore
-            agent.save_models(fileName=f"{network}_{steps}_{episodes}_{alpha}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}")
-        episode += 1
-        if not episode % 100:
-            print(f"Episode {episode}\tScore: {score:.3f}\tAvg score: {avgScore:.3f}")
+            if avgScore > bestScore and episode > 10:
+                bestScore = avgScore
+                agent.save_models(fileName=f"{network}_{steps}_{episodes}_{alpha}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}")
+            if not episode % 10:
+                print(f"Episode {episode}\tScore: {score:.3f}\tAvg score: {avgScore:.3f}")
 
     endTime = time.time()
     print(f"Execution time: {endTime - startTime:.2f} seconds")
@@ -149,19 +110,23 @@ def train_agent_with_batches(bestScore=-1):
 
 #%%
 # Train and plot
-if bufferSize < 2:
-    avgScores = train_agent()
-else:
-    bestScore, avgScores = train_agent_with_batches(bestScore=bestScore)
+bestScore, avgScores = train(bestScore=bestScore, temperature=temperature)
 
 saveName=f"{network}_{steps}_{episodes}_{alpha}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}"
 agent.plot_all(saveName=saveName, avgScores=avgScores)
 
 
 # #%%
-# # Verify model on my users
+# # Modify learning rate
+# for paramGroup in agent.optimizer.param_groups:
+#     paramGroup['lr'] = 0.007
+
+
+# #%%
+# # Load my users
 # myData = MovieLensData(includeMyRatings=True)
 
 # #%%
-# index = agent.choose_action(myData.get_user_profile_from_csv(614)[1:20])
+# # Test my users
+# index = agent.choose_action(myData.get_user_profile_from_csv(615)[1:20])
 # data.moviesDf.iloc[index]['title'] # movie list from "data" because index might be different in "myData"

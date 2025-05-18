@@ -1,7 +1,6 @@
 #%%
 # Imports
 from recommenders.hybrid_filtering import HybridRecommender
-from utils.paths import ADDITIONAL_DIR
 import time
 
 

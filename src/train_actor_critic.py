@@ -13,18 +13,18 @@ from utils.paths import BASE_DIR
 #%% 
 # Parameters
 steps = 3 # recommendations per user
-episodes = 611 # number of users getting recommendations
-alpha = 0.0008 # learning rate
+episodes = 611*16 # number of users getting recommendations
+alpha = 0.00065 # learning rate
 gamma = 0.99 # discount factor
-entropyCoef = 0.2 # entropy coefficient
+entropyCoef = 0.3 # entropy coefficient
 device = torch.device('cpu') # device to use for learning (cuda or cpu)
 network = 'papc' # ac | pac | papc  <=>  p = pretrained | a = actor | c = critic
 bufferSize = 128 # training batch size -> steps size means training after each episode
-batchSize = int(bufferSize * 3) # the total batch size for sampling
-minEntropy = 2 # minimum entropy for the policy
+batchSize = int(bufferSize * 4) # the total batch size for sampling
+minEntropy = 4 # minimum entropy for the policy
 repeatUsers = True # repeat users in env or remove once used
-temperature = 1.15 # temperature for exploration/exploitation
-repeatedActionPenalty = 0.0 # penalty for repeated actions
+temperature = 1.3 # temperature for exploration/exploitation
+repeatedActionPenalty = 0.2 # penalty for repeated actions
 
 
 #%% 
@@ -77,7 +77,7 @@ def train(bestScore=-1, temperature=1.0):
             newObservation, reward, done, info = env.step(action)
             
             # Penalty for repeating actions
-            frequency = agent.actionHistory[:-steps].count(action)
+            frequency = agent.actionHistory[-steps*4:].count(action)
             reward = max(reward - repeatedActionPenalty*frequency, -1.0)
             
             score += reward

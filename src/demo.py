@@ -16,10 +16,12 @@ import torch
 data = MovieLensData(includeMyRatings=True)
 env = MovieLensEnv(data = MovieLensData(includeEstimatedRatings=True))
 
+
 #%%
 # Set user and method
 userId = 611
 method = 'content_based'  # 'collaborative', 'content_based', or 'hybrid'
+
 
 #%%
 # Make recommendations
@@ -49,4 +51,3 @@ elif method == 'rl':
         recommendations.append(env.data.moviesDf.iloc[index]['title'])
 
 print(recommendations)
-

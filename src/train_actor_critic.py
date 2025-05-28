@@ -14,7 +14,7 @@ from utils.paths import BASE_DIR
 # Parameters
 steps = 3 # recommendations per user
 episodes = 611*16 # number of users getting recommendations
-alpha = 0.00065 # learning rate
+alpha = 0.0006 # learning rate
 gamma = 0.99 # discount factor
 entropyCoef = 0.3 # entropy coefficient
 device = torch.device('cpu') # device to use for learning (cuda or cpu)

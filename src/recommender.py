@@ -41,25 +41,24 @@ class Recommender:
         self.method = method
 
 
-    def get_recommendations(self, recommendationsNum=10):
-        if self.method == 'collaborative':
+    def get_recommendations(self, recommendationsNum=12):
+        if self.method == 'Collaborative':
             recommendations = collaborativeRecommendations(data=self.data, userId=self.userId, model=self.svdModel, recomandationsNum=recommendationsNum)
         
-        elif self.method == 'content_based':
+        elif self.method == 'Content-Based':
             recommendations = contentBasedRecommendations(data=self.data, userId=self.userId, recomandationsNum=recommendationsNum, ratingsWeights=[1,0.9,0.7,-0.4,-1])
         
-        elif self.method == 'hybrid':
+        elif self.method == 'Hybrid':
             self.hybridRecommender.choose_user(userId=self.userId)
             recommendations = self.hybridRecommender.get_top_n_recommendations(recommendationsNum)
         
-        elif self.method == 'rl':
-            userProfile = self.data.get_user_profile_from_csv(self.userId)[1:20]
-            rows  = []
-            for i in range(recommendationsNum):
-                index = self.agent.choose_action(observation=userProfile)
-                rows.append(self.env.data.moviesFeatures.iloc[index])
+        elif self.method == 'RL':
+            userProfile = self.data.calculate_user_profile(userId=self.userId)[1:20]
+            _, indexes = self.agent.choose_action(observation=userProfile, actionsNum=recommendationsNum)
+            rows = [self.env.data.moviesFeatures.iloc[index] for index in indexes]
             recommendations = pd.DataFrame(rows, columns=self.env.data.moviesFeatures.columns)
+
         else:
-            raise ValueError("Invalid method specified. Choose from 'collaborative', 'content_based','hybrid' or 'rl'.")
+            raise ValueError("Invalid method specified. Choose from 'Collaborative', 'Content-Based','Hybrid' or 'RL'.")
         
         return recommendations

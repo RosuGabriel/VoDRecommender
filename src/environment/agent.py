@@ -39,15 +39,15 @@ class Agent:
         self.optimizer = optim.Adam(self.actorCritic.parameters(), lr=alpha)
 
 
-    def choose_action(self, observation, temperature=1.0):
+    def choose_action(self, observation, temperature: float=1.0, actionsNum: int=1):
         state = torch.tensor(observation, dtype=torch.float32).to(self.device)
         
         _, probs = self.actorCritic(state)
 
         logits = torch.log(probs + 1e-8)  # avoiding log(0)
-        # Temperature > 1.0 more exploration
-        # Temperature < 1.0 more exploitation
-        scaledLogits = logits / temperature # apply temperature
+        
+        # Temperature > 1.0 more exploration | < 1.0 more exploitation
+        scaledLogits = logits / temperature
 
         dist = Categorical(logits=scaledLogits)
         action = dist.sample()
@@ -56,7 +56,10 @@ class Agent:
         
         self.actionHistory.append(action.item())
 
-        return action.item()
+        if actionsNum > 1:
+            otherActions = torch.multinomial(probs, num_samples=actionsNum, replacement=False).tolist()
+
+        return action.item(), otherActions if actionsNum > 1 else None
     
 
     def add_to_batch(self, currentState, action, reward, newState, done):
@@ -117,7 +120,6 @@ class Agent:
         self.criticLossHistory.append(criticLoss.mean().item())
         self.totalLossHistory.append(totalLoss.item())
         self.deltaHistory.append(delta.mean().item())
-        self.rewardHistory.append(rewards.mean().item())
         self.stateValueHistory.append(currentStateValues.mean().item())
         self.entropyHistory.append(entropy.item())
 
@@ -133,9 +135,9 @@ class Agent:
     def load_models(self, fileName: str=None):
         print('... loading models ...')
         if not fileName:
-            self.actorCritic.load_state_dict(torch.load(self.actorCritic.checkpointFile, map_location=self.device))
+            self.actorCritic.load_state_dict(torch.load(self.actorCritic.checkpointFile, map_location=self.device, weights_only=True))
         else:
-            self.actorCritic.load_state_dict(torch.load(self.actorCritic.checkpointDir / (fileName + '.pt'), map_location=self.device))
+            self.actorCritic.load_state_dict(torch.load(self.actorCritic.checkpointDir / (fileName + '.pt'), map_location=self.device, weights_only=True))
 
         
     def plot_all(self, avgScores=[], saveName=None, startSlice=0, endSlice=None):
@@ -146,7 +148,6 @@ class Agent:
         ("Delta", self.deltaHistory, 'saddlebrown', None, '-'),
         ("Avgerage Reward", avgScores, 'olivedrab', None, '-'),
         ("State Values", self.stateValueHistory, 'darkblue', None, '-'),
-        #("Rewards", self.rewardHistory, 'slategray', '.', ''),
         ("Actions", self.actionHistory, 'crimson', '.', ''),
         ("Entropy", self.entropyHistory, 'darkorange', None, '-'),
         ]

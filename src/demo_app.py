@@ -2,11 +2,14 @@
 # Imports
 import customtkinter as ctk
 from tkinter import messagebox
-from PIL import Image, ImageTk
-import os
+from PIL import Image
+import requests
+import io
 from recommender import Recommender
 import pandas as pd
-from utils.paths import ADDITIONAL_DIR
+from utils.paths import ADDITIONAL_DIR, MOVIE_LENS_DIR, BASE_DIR
+from config_secrets import OMDb_API_KEY
+import threading
 
 
 
@@ -38,6 +41,7 @@ class LoginFrame(ctk.CTkFrame):
 class RegisterFrame(ctk.CTkFrame):
     def __init__(self, master, go_back_callback):
         super().__init__(master)
+        self.moviesDf = master.recommender.data.moviesDf
         self.goBackCallback = go_back_callback
         self.searchJob = None
         self.selectedLovedMovies = []
@@ -89,7 +93,7 @@ class RegisterFrame(ctk.CTkFrame):
             widget.destroy()
         if not query:
             return
-        matches = moviesDf[moviesDf['title'].str.lower().str.contains(query, na=False)]
+        matches = self.moviesDf[self.moviesDf['title'].str.lower().str.contains(query, na=False)]
         for title in matches['title'].tolist():
             ctk.CTkButton(
                 self.resultsFrame,
@@ -99,7 +103,7 @@ class RegisterFrame(ctk.CTkFrame):
 
 
     def select_movie(self, title):
-        movieId = moviesDf[moviesDf['title'] == title]['movieId'].values[0]
+        movieId = self.moviesDf[self.moviesDf['title'] == title]['movieId'].values[0]
         if self.mode == "loved":
             if (movieId, title) not in self.selectedLovedMovies:
                 self.selectedLovedMovies.append((movieId, title))
@@ -133,7 +137,7 @@ class RegisterFrame(ctk.CTkFrame):
             userRatingsDf = userRatingsDf[['userId', 'movieId', 'rating']]
             Recommender.data.ratingsDf = pd.concat([Recommender.data.ratingsDf, userRatingsDf], ignore_index=True)
             userRatingsDf.to_csv(ADDITIONAL_DIR / "myRatings.csv", mode='a', header=False, index=False)
-            self.switch_to_main(self.userId)
+            self.master.show_main(self.userId)
 
 
 
@@ -143,30 +147,116 @@ class MainFrame(ctk.CTkFrame):
         ctk.CTkLabel(self, text=f"User {userId}", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=30)
         
         ctk.CTkLabel(self, text="Choose a recommendation method:", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=10)
-        ctk.CTkButton(self, text="Collaborative", command=lambda: master.show_recommendations(userId, 'collaborative')).pack(pady=20)
-        ctk.CTkButton(self, text="Content Based", command=lambda: master.show_recommendations(userId, 'content_based')).pack(pady=20)
-        ctk.CTkButton(self, text="Hybrid", command=lambda: master.show_recommendations(userId, 'hybrid')).pack(pady=20)
-        ctk.CTkButton(self, text="RL", command=lambda: master.show_recommendations(userId, 'rl')).pack(pady=20)
+        ctk.CTkButton(self, text="Collaborative", command=lambda: master.show_recommendations(userId, 'Collaborative')).pack(pady=20)
+        ctk.CTkButton(self, text="Content-Based", command=lambda: master.show_recommendations(userId, 'Content-Based')).pack(pady=20)
+        ctk.CTkButton(self, text="Hybrid", command=lambda: master.show_recommendations(userId, 'Hybrid')).pack(pady=20)
+        ctk.CTkButton(self, text="RL", command=lambda: master.show_recommendations(userId, 'RL')).pack(pady=20)
         
         ctk.CTkButton(self, text="Change User", command=logoutCallback, fg_color="gray").pack(pady=20)
+
 
 
 class RecommendationsFrame(ctk.CTkFrame):
     def __init__(self, master, userId, method):
         super().__init__(master)
-        userId = int(userId)
-        master.recommender.reset(userId=userId, method=method)
-        self.recommendations = master.recommender.get_recommendations()
-        
-        ctk.CTkLabel(self, text=f"Recommendations for User {userId} using {method} method", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
-        
-        if not self.recommendations.empty:
-            for index, row in self.recommendations.iterrows():
-                ctk.CTkLabel(self, text=row['title']).pack(pady=5)
-        else:
-            ctk.CTkLabel(self, text="No recommendations found.").pack(pady=5)
-        
-        ctk.CTkButton(self, text="Back", command=lambda: master.show_main(userId)).pack(pady=20)
+        self.master = master
+        self.userId = int(userId)
+        self.method = method
+        self.images = {}
+
+        # Loading label
+        self.loading_label = ctk.CTkLabel(self, text="Loading recommendations...", font=ctk.CTkFont(size=16))
+        self.loading_label.pack(pady=50)
+
+        # Loading data in a separate thread
+        self.after(100, lambda: threading.Thread(target=self.load_data, daemon=True).start())
+
+
+    def load_data(self):
+        # Recommendations in a separate thread
+        self.master.recommender.reset(userId=self.userId, method=self.method)
+        recommendations = self.master.recommender.get_recommendations()
+        self.recommendations = recommendations.merge(self.master.linksDf, on='movieId', how='left')
+
+        self.fetch_all_posters()
+
+
+    def fetch_all_posters(self):
+        def fetch_images():
+            for idx, row in self.recommendations.iterrows():
+                imdbId = row['imdbId']
+                posterUrl = self.get_poster_url(imdbId)
+                image = self.load_image_from_url(posterUrl)
+                self.images[idx] = image
+            # Back to main thread after fetching images
+            self.master.after(0, self.display_ui)
+
+        threading.Thread(target=fetch_images, daemon=True).start()
+
+
+    def display_ui(self):
+        self.loading_label.destroy()
+
+        ctk.CTkLabel(self, text=f"Recommendations for User {self.userId} using {self.method} method",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(pady=20)
+
+        self.scrollFrame = ctk.CTkScrollableFrame(self)
+        self.scrollFrame.pack(expand=True, fill="both", padx=10, pady=10)
+
+        self.after(200, self.display_all_movies)
+
+        ctk.CTkButton(self, text="Back", command=lambda: self.master.show_main(self.userId)).pack(pady=20)
+
+
+    def display_all_movies(self):
+        frameWidth = self.scrollFrame.winfo_width()
+        self.numColumns = max(frameWidth // 180, 2)
+
+        for index, row in self.recommendations.iterrows():
+            self.display_movie(row, index)
+
+
+    def display_movie(self, movieRow, index):
+        title = movieRow['title'] + f" ({int(movieRow['year'])})"
+        image = self.images.get(index)  # preloaded image
+
+        imgLabel = ctk.CTkLabel(self.scrollFrame, image=image, text="")
+        imgLabel.image = image
+
+        textLabel = ctk.CTkLabel(self.scrollFrame, text=title, font=ctk.CTkFont(size=12), wraplength=150, justify="center")
+
+        rowPos = index // self.numColumns
+        colPos = index % self.numColumns
+
+        imgLabel.grid(row=rowPos * 2, column=colPos, padx=10, pady=(10, 0))
+        textLabel.grid(row=rowPos * 2 + 1, column=colPos, padx=10, pady=(0, 15))
+
+
+    def load_image_from_url(self, url):
+        try:
+            if url:
+                response = requests.get(url, timeout=5)
+                image = Image.open(io.BytesIO(response.content))
+            else:
+                raise ValueError("Empty URL")
+        except:
+            image = Image.open(BASE_DIR / "../images/film.png")
+
+        return ctk.CTkImage(light_image=image, dark_image=image, size=(150, 220))
+
+
+    def get_poster_url(self, imdbId):
+        if pd.isna(imdbId):
+            return None
+        imdbIdStr = f"tt{int(imdbId):07d}"
+        print(f"Fetching poster for IMDb ID: {imdbIdStr}")
+        url = f"http://www.omdbapi.com/?i={imdbIdStr}&apiKey={OMDb_API_KEY}"
+        try:
+            response = requests.get(url)
+            data = response.json()
+            return data.get('Poster') if data.get('Poster') and data.get('Poster') != "N/A" else None
+        except:
+            return None
 
 
 
@@ -174,11 +264,12 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Movie Recommender App")
-        self.geometry("750x600")
+        self.geometry("770x600")
         self.minsize(600, 600)
         self.resizable(True, True)
         self.show_login()
         self.recommender = Recommender()
+        self.linksDf =  pd.read_csv(MOVIE_LENS_DIR / "links.csv")
 
     def show_login(self):
         self.clear_widgets()
@@ -207,6 +298,5 @@ class App(ctk.CTk):
 
  
 if __name__ == "__main__":
-    moviesDf = Recommender.data.moviesDf
     app = App()
     app.mainloop()

@@ -13,14 +13,14 @@ from utils.paths import BASE_DIR
 #%% 
 # Parameters
 steps = 3 # recommendations per user
-episodes = 611*16 # number of users getting recommendations
-alpha = 0.0006 # learning rate
+episodes = 611*40 # number of users getting recommendations
+alpha = 0.0007 # learning rate
 gamma = 0.99 # discount factor
 entropyCoef = 0.3 # entropy coefficient
 device = torch.device('cpu') # device to use for learning (cuda or cpu)
 network = 'papc' # ac | pac | papc  <=>  p = pretrained | a = actor | c = critic
-bufferSize = 128 # training batch size -> steps size means training after each episode
-batchSize = int(bufferSize * 4) # the total batch size for sampling
+bufferSize = 256 # training batch size -> steps size means training after each episode
+batchSize = int(bufferSize * 3) # the total batch size for sampling
 minEntropy = 4 # minimum entropy for the policy
 repeatUsers = True # repeat users in env or remove once used
 temperature = 1.3 # temperature for exploration/exploitation
@@ -61,18 +61,21 @@ avgScores = []
 
 #%%
 # Train function
-def train(bestScore=-1, temperature=1.0):
+def train(bestScore=-1):
     startTime = time.time()
     episode = 0
+    avgScore = -1
    
     for _ in range(episodes):
         observation, obsInfo = env.reset()
         
         done = False
         score = 0
+
+        temperature = max(1.5 * (1 - avgScore), 0.8)
         
         while not done:
-            action = agent.choose_action(observation, temperature=temperature)
+            action, _ = agent.choose_action(observation, temperature=temperature)
             
             newObservation, reward, done, info = env.step(action)
             
@@ -110,7 +113,7 @@ def train(bestScore=-1, temperature=1.0):
 
 #%%
 # Train and plot
-bestScore, avgScores = train(bestScore=bestScore, temperature=temperature)
+bestScore, avgScores = train(bestScore=bestScore)
 
 saveName=f"{network}_{steps}_{episodes}_{alpha}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}"
 agent.plot_all(saveName=saveName, avgScores=avgScores)

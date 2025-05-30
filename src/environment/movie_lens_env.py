@@ -85,8 +85,12 @@ class MovieLensEnv(gym.Env):
     def _rating_to_reward(self, rating: float):
         if rating >= 4.5:
             return 1.0
-        elif rating >= 4:
+        elif rating >= 4.2:
             return 0.8
+        elif rating >= 4:
+            return 0.6
+        elif rating >= 3.7:
+            return 0.4
         elif rating >= 3.5:
             return 0.3
         elif rating >= 3:

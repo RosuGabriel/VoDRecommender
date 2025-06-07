@@ -1,3 +1,4 @@
+# Imports
 import torch
 import torch.optim as optim
 from torch.distributions import Categorical
@@ -66,7 +67,7 @@ class Agent:
         self.batch.append((currentState, action, reward, newState, done))
 
     
-    def learn(self, entropyCoef=0.01, batchSize=32, minEntropy=0.01):
+    def learn(self, entropyCoef=0.01, batchSize=32, maxEntropy=0.01):
         if len(self.batch) == 0:
             return
         
@@ -111,7 +112,7 @@ class Agent:
         criticLoss = delta ** 2
 
         # Backward
-        entropyBonus = torch.clamp(entropy, max=minEntropy)
+        entropyBonus = torch.clamp(entropy, max=maxEntropy)
         totalLoss = (actorLoss + criticLoss).mean() - entropyCoef * entropyBonus
         totalLoss.backward()
         self.optimizer.step()
@@ -122,6 +123,8 @@ class Agent:
         self.deltaHistory.append(delta.mean().item())
         self.stateValueHistory.append(currentStateValues.mean().item())
         self.entropyHistory.append(entropy.item())
+
+        return entropy.item()
 
     
     def save_models(self, fileName: str=None):

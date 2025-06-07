@@ -8,14 +8,16 @@ import random
 
 # Env definition
 class MovieLensEnv(gym.Env):
-    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100, repeatUsers=False, showInitialDetails=False):
+    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100, repeatUsers=False, showInitialDetails=False, keepProfiles=False):
         super(MovieLensEnv, self).__init__()
         self.data = data
         self.repeatUsers = repeatUsers
-        self.userEmbeddings = data.get_all_user_profiles_from_csv()
+        self.originalUserEmbeddings = data.get_all_user_profiles_from_csv()
         self.maxSteps = maxSteps
         self.reward_range = (-1.0, 1.0)
         self.availableUsers = list(self.data.all_users.copy())
+        self.userEmbeddings = {}
+        self.keepProfiles = keepProfiles
 
         if showInitialDetails:
             print(f"Available users: {len(self.availableUsers)}")
@@ -43,6 +45,7 @@ class MovieLensEnv(gym.Env):
         movie_id = self.data.moviesDf.iloc[action]['movieId']
         
         rating_row = self.userRatings[self.userRatings['movieId'] == movie_id]
+        
         if rating_row.empty:
             reward = 0.0  # not rated movie
         else:
@@ -50,7 +53,8 @@ class MovieLensEnv(gym.Env):
 
         movieFeatures = np.array(self.data.get_movie_features(movie_id)[:19])
         
-        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures*updateFactor #*reward
+        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures*updateFactor * reward
+        self.userEmbeddings[self.userId] = self.userEmbedding
         
         # print('user',self.userEmbedding)
         # print('movie',movieFeatures)
@@ -77,24 +81,21 @@ class MovieLensEnv(gym.Env):
         if not self.repeatUsers:
             self.availableUsers.remove(self.userId)
 
-        self.userEmbedding = self.userEmbeddings[self.userEmbeddings['userId'] == self.userId].values[0][1:20]
+        if self.keepProfiles and self.userId in self.userEmbeddings:
+            self.userEmbedding = self.userEmbeddings[self.userId]
+        elif self.keepProfiles:
+            self.userEmbeddings[self.userId] = self.originalUserEmbeddings[self.originalUserEmbeddings['userId'] == self.userId].values[0][1:20]    
+            self.userEmbedding = self.userEmbeddings[self.userId]
+        else:
+            self.userEmbedding = self.originalUserEmbeddings[self.originalUserEmbeddings['userId'] == self.userId].values[0][1:20]
+        
         self.userRatings = self.data.user_ratings(self.userId).copy()
        
 
     # Function to map rating to reward
     def _rating_to_reward(self, rating: float):
-        if rating >= 4.5:
-            return 1.0
-        elif rating >= 4.2:
-            return 0.8
-        elif rating >= 4:
-            return 0.6
-        elif rating >= 3.7:
-            return 0.4
-        elif rating >= 3.5:
-            return 0.3
-        elif rating >= 3:
-            return 0.0
-        elif rating >= 2:
-            return -0.5
-        return -1.0
+        return 2 * (rating - 0.5) / 4.5 - 1
+
+
+    def reward_to_rating(self, reward: float):
+        return (reward + 1) * 4.5 / 2 + 0.5

@@ -33,7 +33,7 @@ class Recommender:
         criticModelName = "critic_10May0028.pt"
         pretrainedCriticModel = torch.load(BASE_DIR / f"models/pretrained/{criticModelName}")
         self.agent = Agent(actionsNum=self.env.action_space.n, observationDim=self.env.observation_space.shape[0], pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel)
-        self.agent.load_models('../good models/papc_3_24440_0.0002_0.99_02-06-2025_23-42')
+        self.agent.load_models('../good models/3_24440_0.00015_0.99_11-06-2025_00-29')
 
 
     def reset(self, userId, method='content_based'):

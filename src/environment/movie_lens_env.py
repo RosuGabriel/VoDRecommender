@@ -53,11 +53,8 @@ class MovieLensEnv(gym.Env):
 
         movieFeatures = np.array(self.data.get_movie_features(movie_id)[:19])
         
-        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures*updateFactor * reward
+        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures * updateFactor * reward
         self.userEmbeddings[self.userId] = self.userEmbedding
-        
-        # print('user',self.userEmbedding)
-        # print('movie',movieFeatures)
         
         done = self.stepCount >= self.maxSteps
         info = {"movieFeatures": movieFeatures}

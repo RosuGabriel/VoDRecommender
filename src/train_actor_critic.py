@@ -7,28 +7,28 @@ import time
 import torch
 from utils.paths import BASE_DIR
 from collections import deque
+import numpy as np
 
 
 
 #%%
 # Parameters
 steps = 3 # recommendations per user
-episodes = 611*40 # number of users getting recommendations
-alpha = 0.00005 # learning rate
+episodes = 611*2 # number of users getting recommendations
+alpha = 0.0003 # learning rate
 gamma = 0.99 # discount factor
-entropyCoef = 1 # entropy coefficient
+entropyCoef = 0.2 # entropy coefficient
 device = torch.device('cuda') # device to use for learning (cuda or cpu)
-network = 'papc' # ac | pac | papc  <=>  p = pretrained | a = actor | c = critic
-bufferSize = 512 # training batch size -> steps size means training after each episode
-batchSize = int(bufferSize * 4) # the total batch size for sampling
-maxEntropy = 10 # minimum entropy for the policy
+bufferSize = 256 # training batch size
+batchSize = 10000 # the total batch size for sampling
+maxEntropy = 9 # minimum entropy for the policy
 repeatUsers = True # repeat users in env or remove once used
-temperature = 1 # temperature for exploration/exploitation
+temperature = 1.5 # temperature for exploration/exploitation
 repeatedActionPenalty = 0.15 # penalty for repeated actions
-saveName=f"{network}_{steps}_{episodes}_{alpha}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}"
-
-updateStep = 400
-recentEntropiesDim = 100
+saveName=f"{steps}_{episodes}_{alpha}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}"
+stateUpdateFactor = 0.3
+explorationPercentage = int(0.05*episodes) # percentage of episodes to explore at the beginning
+rewardScale = 10
 
 
 #%% 
@@ -43,22 +43,16 @@ env = MovieLensEnv(maxSteps=steps, data=data, repeatUsers=repeatUsers, keepProfi
 
 #%%
 # Create agent
-if network == 'ac':
-    agent = Agent(alpha=alpha, gamma=gamma, actionsNum=env.action_space.n, observationDim=env.observation_space.shape[0], device=device, batchSize=batchSize)
-else:
-    actorModelName = "actor_10May0028.pt"
-    pretrainedActorModel = torch.load(BASE_DIR / f"models/pretrained/{actorModelName}")
-    if network == 'pac':
-        agent = Agent(alpha=alpha, gamma=gamma, actionsNum=env.action_space.n, observationDim=env.observation_space.shape[0], device=device, batchSize=batchSize, pretrainedActor=pretrainedActorModel)
-    elif network == 'papc':
-        criticModelName = "critic_10May0028.pt"
-        pretrainedCriticModel = torch.load(BASE_DIR / f"models/pretrained/{criticModelName}")
-        agent = Agent(alpha=alpha, gamma=gamma, actionsNum=env.action_space.n, observationDim=env.observation_space.shape[0], device=device, batchSize=batchSize, pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel)
+actorModelName = "actor_10May0028.pt"
+pretrainedActorModel = torch.load(BASE_DIR / f"models/pretrained/{actorModelName}")
+criticModelName = "critic_10May0028.pt"
+pretrainedCriticModel = torch.load(BASE_DIR / f"models/pretrained/{criticModelName}")
+agent = Agent(alpha=alpha, gamma=gamma, actionsNum=env.action_space.n, observationDim=env.observation_space.shape[0], device=device, batchSize=batchSize, pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel)
 
 
 #%%
 # Reset scores
-bestScore = env.reward_range[0]
+bestScore = env.reward_range[0] * rewardScale
 scoreHistory = deque(maxlen=100)
 avgScores = []
 
@@ -66,12 +60,14 @@ avgScores = []
 #%%
 # Train function
 def train():
-    global bestScore, temperature, maxEntropy, entropyCoef, recentEntropiesDim, updateStep
+    global bestScore, temperature, maxEntropy, entropyCoef
     startTime = time.time()
     episode = 0
-    avgScore = -1
-    recentEntropies = deque(maxlen=recentEntropiesDim)
-
+    avgScore = -rewardScale
+    recentEntropies = deque(maxlen=100)
+    entropy = maxEntropy
+    #entropyDiscount = 6 / episodes
+    
     for _ in range(episodes+bufferSize):
         observation, obsInfo = env.reset()
         
@@ -82,61 +78,58 @@ def train():
             action, _ = agent.choose_action(observation, temperature=temperature)
             
             # Gradient clipping (limits big changes)
-            torch.nn.utils.clip_grad_norm_(agent.actorCritic.parameters(), 0.5)
-            newObservation, reward, done, info = env.step(action, updateFactor=0.1)
-            
+            torch.nn.utils.clip_grad_norm_(agent.actorCritic.parameters(), max_norm=0.5)
+          
+            newObservation, reward, done, info = env.step(action, updateFactor=stateUpdateFactor)
+            reward *= rewardScale
+
             # Penalty for repeating actions
             frequency = agent.actionHistory[steps*-30:].count(action)
-            reward = max(reward - repeatedActionPenalty*frequency, -1)
+            reward = max(reward - repeatedActionPenalty*frequency, -rewardScale)
 
             # Bonus for better actions
             if reward > avgScore:
-                reward = min(reward + (reward - avgScore) * 1.5, 1.0)
+                reward = reward + (reward - avgScore)
             
             score += reward
             agent.add_to_batch(observation, action, reward, newObservation, done)
             observation = newObservation
-            
+                        
         if len(agent.batch) >= bufferSize:
             episode += 1
 
-            # First 5% of episodes just explore
-            if episode > episodes*0.05:
-            # If performance decreases increase entropy coefficient
-                if avgScore < sum(avgScores[-100:])/len(avgScores[-100:]) and entropyCoef < 0.91:
-                    entropyCoef *= 1.05
+            if episode > explorationPercentage:
+                if avgScore < np.mean(avgScores[-100:]):
+                    if  temperature < 1.4:
+                        temperature = temperature * 1.05
+                    elif entropyCoef < 0.5:
+                        entropyCoef = entropyCoef * 1.05
+                elif temperature > 1.0:
+                    temperature = temperature * 0.99
                 else:
-                    entropyCoef = max(entropyCoef * 0.95, 0.1)  # decay entropy coefficient
+                    entropyCoef = max(entropyCoef*0.99, 0.1)
 
-                # If score is improving, decrease maximum entropy
-                if avgScore > sum(avgScores[-1000:])/len(avgScores[-1000:]):
-                    maxEntropy = max(maxEntropy * 0.99, 2)  # decay minimum entropy
-                    
-                # If entropy stays high, increase maximum entropy
-                if sum(recentEntropies) / len(recentEntropies) > maxEntropy * 1.05:
-                    maxEntropy = maxEntropy * 1.05
-                
-            entropy = agent.learn(entropyCoef=entropyCoef, maxEntropy=maxEntropy, batchSize=bufferSize)
+            entropy = agent.learn(entropyCoef=entropyCoef, maxEntropy=maxEntropy, batchSampleSize=bufferSize)
             if entropy is not None:
                 recentEntropies.append(entropy)
 
             score = score / steps
 
             scoreHistory.append(score)
-            avgScore = sum(scoreHistory) / len(scoreHistory) if scoreHistory else -1
+            avgScore = sum(scoreHistory) / len(scoreHistory) if scoreHistory else -rewardScale
             avgScores.append(avgScore)
 
-            if avgScore > bestScore and episode > episodes*0.1:
+            if avgScore > bestScore and episode > explorationPercentage:
                 bestScore = avgScore
                 agent.save_models(fileName=saveName)
             if not episode % 25:
                 print(f"Episode {episode}\tScore: {score:.3f}\tAvg score: {avgScore:.3f}")
-                print(f"Entropy {sum(recentEntropies) / len(recentEntropies):.3f}\tMaxEntropy {maxEntropy:.3f}\tEntropyCoef {entropyCoef:.3f}")
+                print(f"Entropy {sum(recentEntropies) / len(recentEntropies):.3f}\tEntropyCoef {entropyCoef:.3f}\tTemperature {temperature:.3f}")
 
 
     endTime = time.time()
     print(f"Execution time: {endTime - startTime:.2f} seconds")
-    print(f"Best score: {bestScore:.2f}")
+    print(f"Best score: {bestScore/rewardScale:.2f}")
 
     return bestScore, avgScores
 
@@ -148,5 +141,5 @@ bestScore, avgScores = train()
 
 #%%
 # Plot the results
-agent.plot_all(saveName=saveName, avgScores=avgScores)
-print(f"Best avg. reward: {env.reward_to_rating(bestScore):.2f} stars")
+agent.plot_all(saveName=saveName, avgScores=avgScores, startSlice=bufferSize+explorationPercentage)
+print(f"Best avg. rating: {env.reward_to_rating(bestScore/rewardScale):.2f} stars")

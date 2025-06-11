@@ -3,10 +3,10 @@ from utils.paths import BASE_DIR
 
 
 
-class PActorPCriticNet(nn.Module):
+class ActorCriticNet(nn.Module):
     def __init__(self, pretrainedActor, pretrainedCritic, newInDim: int, newActionsNum: int,
                  name='prtr_actor_critic', checkpointDir=BASE_DIR / "tmp/actor critic"):
-        super(PActorPCriticNet, self).__init__()
+        super(ActorCriticNet, self).__init__()
         self.name = name
         self.checkpointDir = checkpointDir
         self.checkpointFile = self.checkpointDir / (name + '.pt')
@@ -34,7 +34,7 @@ class PActorPCriticNet(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
 
         # Critic network
-        self.critic = pretrainedCritic  # input state + action
+        self.critic = pretrainedCritic
 
 
     def forward(self, state, action=None):

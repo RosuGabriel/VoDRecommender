@@ -2,43 +2,38 @@
 import torch
 import torch.optim as optim
 from torch.distributions import Categorical
-from actor_critic.ActorCriticNet import ActorCriticNet
-from actor_critic.PActorCriticNet import PActorCriticNet
-from actor_critic.PActorPCriticNet import PActorPCriticNet
+from models.ActorCriticNet import ActorCriticNet
 import matplotlib.pyplot as plt
 import numpy as np
 import random
-from collections import deque
 
 
 
 class Agent:
-    def __init__(self, alpha=0.0003, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None, pretrainedCritic=None, batchSize=32):
+    def __init__(self, alpha=0.0001, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None, pretrainedCritic=None, batchSize=32):
         self.gamma = gamma
         self.actionsNum = actionsNum
         self.action = None
-        self.batch = deque(maxlen=batchSize)
+        self.batchSize = batchSize
+        self.batch = []
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.actorLossHistory = []
-        self.criticLossHistory = []
         self.totalLossHistory = []
+        self.criticLossHistory = []
         self.deltaHistory = []
         self.actionHistory = []
         self.rewardHistory = []
         self.avgRatingHistory = []
         self.stateValueHistory = []
         self.entropyHistory = []
-
-        if pretrainedActor and pretrainedCritic:
-            self.actorCritic = PActorPCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
-        elif pretrainedActor:
-            self.actorCritic = PActorCriticNet(pretrainedActor, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
-        else:
-            self.actorCritic = ActorCriticNet(actionsNum=actionsNum).to(self.device)
         
-        self.optimizer = optim.Adam(self.actorCritic.parameters(), lr=alpha)
+        # Actor-Critic network
+        self.actorCritic = ActorCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
 
+        # Optimizer
+        self.optimizer = torch.optim.Adam(self.actorCritic.parameters(), lr=alpha)
+       
 
     def choose_action(self, observation, temperature: float=1.0, actionsNum: int=1):
         state = torch.tensor(observation, dtype=torch.float32).to(self.device)
@@ -64,16 +59,37 @@ class Agent:
     
 
     def add_to_batch(self, currentState, action, reward, newState, done):
+        if len(self.batch) >= self.batchSize:
+            idx = random.randint(0, int(len(self.batch)/2))
+            self.batch.pop(idx)
         self.batch.append((currentState, action, reward, newState, done))
 
+
+    def sample_batch(self, batchSampleSize):
+        batchSampleSize = min(batchSampleSize, len(self.batch))
+        recentSize = batchSampleSize // 2
+        oldSize = batchSampleSize - recentSize
+
+        # Take recent experience
+        recentBatch = self.batch[-recentSize:] if recentSize > 0 else []
+
+        # Take randomly old experience
+        oldCandidates = self.batch[:-recentSize] if recentSize > 0 else self.batch
+        oldBatch = random.sample(oldCandidates, oldSize) if oldSize > 0 else []
+
+        sampledBatch = oldBatch + recentBatch
+        random.shuffle(sampledBatch)
+        currentStates, actions, rewards, newStates, dones = zip(*sampledBatch)
+        return currentStates, actions, rewards, newStates, dones
+
     
-    def learn(self, entropyCoef=0.01, batchSize=32, maxEntropy=0.01):
+    def learn(self, entropyCoef=0.01, batchSampleSize=32, maxEntropy=0.01):
         if len(self.batch) == 0:
             return
         
-        sampledBatch = random.sample(self.batch, min(batchSize, len(self.batch)))
-        
-        currentStates, actions, rewards, newStates, dones = zip(*sampledBatch)
+        self.optimizer.zero_grad()
+
+        currentStates, actions, rewards, newStates, dones = self.sample_batch(batchSampleSize)
 
         currentStates = np.array(currentStates) 
         actions = np.array(actions)
@@ -89,8 +105,6 @@ class Agent:
 
         rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
         
-        self.optimizer.zero_grad()
-
         # Forward
         currentStateValues, probs = self.actorCritic(currentStates)
         newStateValues, _ = self.actorCritic(newStates)
@@ -103,23 +117,29 @@ class Agent:
         logProbs = dist.log_prob(actions)
         entropy = dist.entropy().mean()
 
-        # Calculate targets
+        # Calculate targets and delta
         targets = rewards + self.gamma * newStateValues * (1 - dones)
-        delta = torch.clamp(targets - currentStateValues, -1, 1)
+        delta = targets - currentStateValues
+        normalizedDelta = (delta - delta.mean()) / (delta.std() + 1e-8)
 
         # Losses
-        actorLoss = -logProbs * delta.detach()
-        criticLoss = delta ** 2
+        criticLoss = (delta ** 2).mean()
+        actorLoss = (-logProbs * normalizedDelta.detach()).mean()
+
+        # Entropy bonus on actor loss
+        entropyBonus = torch.clamp(entropy, max=maxEntropy)
+        actorLoss = actorLoss - entropyCoef * entropyBonus
+
+        totalLoss = criticLoss + actorLoss
 
         # Backward
-        entropyBonus = torch.clamp(entropy, max=maxEntropy)
-        totalLoss = (actorLoss + criticLoss).mean() - entropyCoef * entropyBonus
         totalLoss.backward()
         self.optimizer.step()
 
-        self.actorLossHistory.append(actorLoss.mean().item())
-        self.criticLossHistory.append(criticLoss.mean().item())
+        # Add to history for plot
+        self.actorLossHistory.append(actorLoss.item())
         self.totalLossHistory.append(totalLoss.item())
+        self.criticLossHistory.append(criticLoss.item())
         self.deltaHistory.append(delta.mean().item())
         self.stateValueHistory.append(currentStateValues.mean().item())
         self.entropyHistory.append(entropy.item())
@@ -145,14 +165,14 @@ class Agent:
         
     def plot_all(self, avgScores=[], saveName=None, startSlice=0, endSlice=None):
         plotData = [
-        ("Actor Loss", self.actorLossHistory, 'orange', None, '-'),
+        ("Total Loss", self.totalLossHistory, 'darkviolet', None, '-'),
+        ("Actor Loss", self.actorLossHistory, 'mediumpurple', None, '-'),
         ("Critic Loss", self.criticLossHistory, 'steelblue', None, '-'),
-        ("Total Loss", self.totalLossHistory, 'mediumpurple', None, '-'),
         ("Delta", self.deltaHistory, 'saddlebrown', None, '-'),
         ("Avgerage Reward", avgScores, 'olivedrab', None, '-'),
         ("State Values", self.stateValueHistory, 'darkblue', None, '-'),
-        ("Actions", self.actionHistory, 'crimson', '.', ''),
         ("Entropy", self.entropyHistory, 'darkorange', None, '-'),
+        ("Actions", self.actionHistory, 'crimson', '.', ''),
         ]
 
         n = len(plotData)

@@ -240,6 +240,18 @@ class MovieLensData:
     def movie_ratings(self, movieId: int):
         return self.ratingsDf[self.ratingsDf['movieId'] == movieId]
     
+    @property
+    def movies_popularity(self):
+        avgRatings = self.ratingsDf.groupby('movieId')['rating'].mean()
+
+        minAvg = avgRatings.min()
+        maxAvg = avgRatings.max()
+
+        popularity = (avgRatings - minAvg) / (maxAvg - minAvg)
+        popularity = popularity * 0.8 + 0.1
+
+        return popularity.to_dict()
+
 
     @property
     def all_users(self):

@@ -5,7 +5,7 @@ from utils.paths import BASE_DIR
 
 class ActorCriticNet(nn.Module):
     def __init__(self, pretrainedActor, pretrainedCritic, newInDim: int, newActionsNum: int,
-                 name='prtr_actor_critic', checkpointDir=BASE_DIR / "tmp/actor critic"):
+                 name='prtr_actor_critic', checkpointDir=BASE_DIR / "tmp/models checkpoint"):
         super(ActorCriticNet, self).__init__()
         self.name = name
         self.checkpointDir = checkpointDir

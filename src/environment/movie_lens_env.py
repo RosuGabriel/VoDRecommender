@@ -8,7 +8,8 @@ import random
 
 # Env definition
 class MovieLensEnv(gym.Env):
-    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100, repeatUsers=False, showInitialDetails=False, keepProfiles=False):
+    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100, repeatUsers=False, showInitialDetails=False, keepProfiles=False,
+                updateFactor=0.2, rarityBonus = 0.2):
         super(MovieLensEnv, self).__init__()
         self.data = data
         self.repeatUsers = repeatUsers
@@ -18,6 +19,9 @@ class MovieLensEnv(gym.Env):
         self.availableUsers = list(self.data.all_users.copy())
         self.userEmbeddings = {}
         self.keepProfiles = keepProfiles
+        self.moviePopularity = data.movies_popularity
+        self.updateFactor = updateFactor
+        self.rarityBonus = rarityBonus
 
         if showInitialDetails:
             print(f"Available users: {len(self.availableUsers)}")
@@ -31,15 +35,15 @@ class MovieLensEnv(gym.Env):
 
 
     # New state and reset stepCount
-    def reset(self):
+    def reset(self, userId=None):
         self.stepCount = 0
-        self._reset_user()
+        self._reset_user(userId)
 
-        return self.userEmbedding, {"userId": self.userId,"userRatings": self.userRatings}
+        return np.array(self.userEmbedding), {"userId": self.userId,"userRatings": self.userRatings}
 
 
     # The action is the index of the movie in the moviesDf
-    def step(self, action, updateFactor=0.2):
+    def step(self, action):
         self.stepCount += 1
 
         movie_id = self.data.moviesDf.iloc[action]['movieId']
@@ -51,15 +55,19 @@ class MovieLensEnv(gym.Env):
         else:
             reward = self._rating_to_reward(rating_row['rating'].values[0])
 
+        if self.rarityBonus:
+            rarity = 1.0 - self.moviePopularity[movie_id]
+            reward = reward * (1-self.rarityBonus) + rarity * self.rarityBonus
+
         movieFeatures = np.array(self.data.get_movie_features(movie_id)[:19])
         
-        self.userEmbedding = self.userEmbedding*(1-updateFactor) + movieFeatures * updateFactor * reward
+        self.userEmbedding = self.userEmbedding*(1-self.updateFactor) + movieFeatures * self.updateFactor * reward
         self.userEmbeddings[self.userId] = self.userEmbedding
         
         done = self.stepCount >= self.maxSteps
         info = {"movieFeatures": movieFeatures}
 
-        return self.userEmbedding, reward, done, info
+        return np.array(self.userEmbedding), reward, done, info
 
 
     def render(self, mode='human'):
@@ -68,15 +76,17 @@ class MovieLensEnv(gym.Env):
     
 
     # New user is chosen randomly
-    def _reset_user(self):
+    def _reset_user(self, userId=None):
         if len(self.availableUsers) == 0:
             print("No more users available. User list refreshed.")
             self.availableUsers = list(self.data.all_users.copy())
 
-        self.userId = random.choice(self.availableUsers)
-        
-        if not self.repeatUsers:
-            self.availableUsers.remove(self.userId)
+        if userId is not None:
+            self.userId = userId
+        else:
+            self.userId = random.choice(self.availableUsers)
+            if not self.repeatUsers:
+                self.availableUsers.remove(self.userId)
 
         if self.keepProfiles and self.userId in self.userEmbeddings:
             self.userEmbedding = self.userEmbeddings[self.userId]

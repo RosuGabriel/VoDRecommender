@@ -18,7 +18,7 @@ class Recommender:
     def __init__(self, method='content_based', userId=1):
         self.method = method
         self.userId = userId
-        self.env = MovieLensEnv(data = MovieLensData(includeEstimatedRatings=True))
+        self.env = MovieLensEnv(data = MovieLensData(includeEstimatedRatings=True, includeMyRatings=True))
 
         # Load collaborative filtering model
         self.svdModel = import_model()
@@ -32,8 +32,9 @@ class Recommender:
         pretrainedActorModel = torch.load(BASE_DIR / f"models/pretrained/{actorModelName}")
         criticModelName = "critic_10May0028.pt"
         pretrainedCriticModel = torch.load(BASE_DIR / f"models/pretrained/{criticModelName}")
-        self.agent = Agent(actionsNum=self.env.action_space.n, observationDim=self.env.observation_space.shape[0], pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel)
-        self.agent.load_models('../good models/3_24440_0.00015_0.99_11-06-2025_00-29')
+        self.agent = Agent(beta = 1, actionsNum=self.env.action_space.n, observationDim=self.env.observation_space.shape[0], pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel)
+        self.agent.load_models('../good models/3_12220_0.002_0.99_12-06-2025_17-45')
+        #self.agent.load_models('../models checkpoint/')
 
 
     def reset(self, userId, method='content_based'):

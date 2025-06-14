@@ -10,13 +10,14 @@ import random
 
 
 class Agent:
-    def __init__(self, alpha=0.0001, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None, pretrainedCritic=None, batchSize=32):
+    def __init__(self, alpha=0.0001, beta=None, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None, pretrainedCritic=None, batchSize=32):
         self.gamma = gamma
         self.actionsNum = actionsNum
         self.action = None
         self.batchSize = batchSize
         self.batch = []
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.separateOptimizers = False
 
         self.actorLossHistory = []
         self.totalLossHistory = []
@@ -31,9 +32,34 @@ class Agent:
         # Actor-Critic network
         self.actorCritic = ActorCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
 
-        # Optimizer
-        self.optimizer = torch.optim.Adam(self.actorCritic.parameters(), lr=alpha)
-       
+        # Optimizer type
+        if beta is None:
+            # Shared optimizer
+            self.optimizer = torch.optim.Adam(self.actorCritic.parameters(), lr=alpha)
+        else:
+            self.separateOptimizers = True
+
+            # Actor parameters
+            self.actorParameters = []
+            if self.actorCritic.a_input_adapter:
+                self.actorParameters += list(self.actorCritic.a_input_adapter.parameters())
+
+            self.actorParameters += list(self.actorCritic.actor_fc1.parameters())
+            self.actorParameters += list(self.actorCritic.actor_fc2.parameters())
+            self.actorParameters += list(self.actorCritic.actor_output.parameters())
+
+            # Critic parameters
+            self.criticParameters = []
+            if self.actorCritic.c_input_adapter:
+                self.criticParameters += list(self.actorCritic.c_input_adapter.parameters())
+
+            self.criticParameters += list(self.actorCritic.action_adapter.parameters())
+            self.criticParameters += list(self.actorCritic.critic.parameters())
+
+            # Optimizer for each component
+            self.actorOptimizer = optim.Adam(self.actorParameters, lr=alpha)
+            self.criticOptimizer = optim.Adam(self.criticParameters, lr=beta)
+
 
     def choose_action(self, observation, temperature: float=1.0, actionsNum: int=1):
         state = torch.tensor(observation, dtype=torch.float32).to(self.device)
@@ -65,9 +91,9 @@ class Agent:
         self.batch.append((currentState, action, reward, newState, done))
 
 
-    def sample_batch(self, batchSampleSize):
+    def sample_batch(self, batchSampleSize, recentExperienceRatio):
         batchSampleSize = min(batchSampleSize, len(self.batch))
-        recentSize = batchSampleSize // 2
+        recentSize = int(batchSampleSize * recentExperienceRatio)
         oldSize = batchSampleSize - recentSize
 
         # Take recent experience
@@ -83,13 +109,11 @@ class Agent:
         return currentStates, actions, rewards, newStates, dones
 
     
-    def learn(self, entropyCoef=0.01, batchSampleSize=32, maxEntropy=0.01):
+    def learn(self, entropyCoef=0.01, batchSampleSize=32, maxEntropy=10, recentExperienceRatio=0.25):
         if len(self.batch) == 0:
             return
-        
-        self.optimizer.zero_grad()
 
-        currentStates, actions, rewards, newStates, dones = self.sample_batch(batchSampleSize)
+        currentStates, actions, rewards, newStates, dones = self.sample_batch(batchSampleSize=batchSampleSize, recentExperienceRatio=recentExperienceRatio)
 
         currentStates = np.array(currentStates) 
         actions = np.array(actions)
@@ -101,9 +125,10 @@ class Agent:
         actions = torch.from_numpy(actions).int().to(self.device)
         rewards = torch.from_numpy(rewards).float().to(self.device)
         newStates = torch.from_numpy(newStates).float().to(self.device)
-        dones = torch.from_numpy(dones).int().to(self.device)
+        dones = torch.from_numpy(dones).float().to(self.device)
 
-        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        rewards = rewards - rewards.mean()
+        #rewards = rewards.clamp(min=-1.0, max=1.0)
         
         # Forward
         currentStateValues, probs = self.actorCritic(currentStates)
@@ -120,11 +145,10 @@ class Agent:
         # Calculate targets and delta
         targets = rewards + self.gamma * newStateValues * (1 - dones)
         delta = targets - currentStateValues
-        normalizedDelta = (delta - delta.mean()) / (delta.std() + 1e-8)
-
+        
         # Losses
         criticLoss = (delta ** 2).mean()
-        actorLoss = (-logProbs * normalizedDelta.detach()).mean()
+        actorLoss = (-logProbs * delta.detach()).mean()
 
         # Entropy bonus on actor loss
         entropyBonus = torch.clamp(entropy, max=maxEntropy)
@@ -133,8 +157,21 @@ class Agent:
         totalLoss = criticLoss + actorLoss
 
         # Backward
-        totalLoss.backward()
-        self.optimizer.step()
+        if self.separateOptimizers:
+            self.criticOptimizer.zero_grad()
+            criticLoss.backward(retain_graph=True)
+            torch.nn.utils.clip_grad_norm_(self.criticParameters, max_norm=0.5)
+            self.criticOptimizer.step()
+
+            self.actorOptimizer.zero_grad()
+            actorLoss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actorParameters, max_norm=0.5)
+            self.actorOptimizer.step()
+        else:
+            self.optimizer.zero_grad()
+            totalLoss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actorCritic.parameters(), max_norm=0.5)
+            self.optimizer.step()
 
         # Add to history for plot
         self.actorLossHistory.append(actorLoss.item())

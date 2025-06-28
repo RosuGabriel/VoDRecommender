@@ -10,7 +10,8 @@ import random
 
 
 class Agent:
-    def __init__(self, alpha=0.0001, beta=None, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None, pretrainedCritic=None, batchSize=32):
+    def __init__(self, alpha=0.0001, beta=None, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None,
+                 pretrainedCritic=None, batchSize=32, usePiForCritic=False):
         self.gamma = gamma
         self.actionsNum = actionsNum
         self.action = None
@@ -18,6 +19,7 @@ class Agent:
         self.batch = []
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.separateOptimizers = False
+        self.usePiForCritic = usePiForCritic
 
         self.actorLossHistory = []
         self.totalLossHistory = []
@@ -31,7 +33,7 @@ class Agent:
         
         # Actor-Critic network
         self.actorCritic = ActorCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
-
+     
         # Optimizer type
         if beta is None:
             # Shared optimizer
@@ -68,10 +70,12 @@ class Agent:
 
         logits = torch.log(probs + 1e-8)  # avoiding log(0)
         
-        # Temperature > 1.0 more exploration | < 1.0 more exploitation
-        scaledLogits = logits / temperature
+        if temperature == 1:
+            dist = Categorical(probs=probs)
+        else: # temperature > 1.0 more exploration | < 1.0 more exploitation
+            scaledLogits = logits / temperature
+            dist = Categorical(logits=scaledLogits)
 
-        dist = Categorical(logits=scaledLogits)
         action = dist.sample()
 
         self.action = action
@@ -79,16 +83,17 @@ class Agent:
         self.actionHistory.append(action.item())
 
         if actionsNum > 1:
+            #otherActions = torch.multinomial(torch.exp(scaledLogits), num_samples=actionsNum, replacement=False).tolist()
             otherActions = torch.multinomial(probs, num_samples=actionsNum, replacement=False).tolist()
 
         return action.item(), otherActions if actionsNum > 1 else None
-    
 
-    def add_to_batch(self, currentState, action, reward, newState, done):
+
+    def add_to_batch(self, currentState, actionIndex, actionEmbedding, reward, newState, newActionEmbedding, done):
         if len(self.batch) >= self.batchSize:
             idx = random.randint(0, int(len(self.batch)/2))
             self.batch.pop(idx)
-        self.batch.append((currentState, action, reward, newState, done))
+        self.batch.append((currentState, actionIndex, actionEmbedding, reward, newState, newActionEmbedding, done))
 
 
     def sample_batch(self, batchSampleSize, recentExperienceRatio):
@@ -105,41 +110,46 @@ class Agent:
 
         sampledBatch = oldBatch + recentBatch
         random.shuffle(sampledBatch)
-        currentStates, actions, rewards, newStates, dones = zip(*sampledBatch)
-        return currentStates, actions, rewards, newStates, dones
+        currentStates, actionIndexes, actionEmbeddings, rewards, newStates, newActionEmbeddings, dones = zip(*sampledBatch)
+        return currentStates, actionIndexes, actionEmbeddings, rewards, newStates, newActionEmbeddings, dones
 
     
     def learn(self, entropyCoef=0.01, batchSampleSize=32, maxEntropy=10, recentExperienceRatio=0.25):
         if len(self.batch) == 0:
             return
 
-        currentStates, actions, rewards, newStates, dones = self.sample_batch(batchSampleSize=batchSampleSize, recentExperienceRatio=recentExperienceRatio)
+        currentStates, actionIndexes, actionEmbeddings, rewards, newStates, newActionEmbeddings, dones = self.sample_batch(batchSampleSize=batchSampleSize, recentExperienceRatio=recentExperienceRatio)
 
         currentStates = np.array(currentStates) 
-        actions = np.array(actions)
+        actionIndexes = np.array(actionIndexes)
+        actionEmbeddings = np.array(actionEmbeddings)
         rewards = np.array(rewards)
         newStates = np.array(newStates)
+        newActionEmbeddings = np.array(newActionEmbeddings)
         dones = np.array(dones)
 
         currentStates = torch.from_numpy(currentStates).float().to(self.device)
-        actions = torch.from_numpy(actions).int().to(self.device)
+        actionIndexes = torch.from_numpy(actionIndexes).float().to(self.device)
+        actionEmbeddings = torch.from_numpy(actionEmbeddings).float().to(self.device)
         rewards = torch.from_numpy(rewards).float().to(self.device)
         newStates = torch.from_numpy(newStates).float().to(self.device)
+        newActionEmbeddings = torch.from_numpy(newActionEmbeddings).float().to(self.device)
         dones = torch.from_numpy(dones).float().to(self.device)
 
-        rewards = rewards - rewards.mean()
-        #rewards = rewards.clamp(min=-1.0, max=1.0)
-        
-        # Forward
-        currentStateValues, probs = self.actorCritic(currentStates)
-        newStateValues, _ = self.actorCritic(newStates)
+        # State values
+        if self.usePiForCritic:
+            currentStateValues, probs = self.actorCritic(currentStates, actionEmbeddings)
+            newStateValues, _ = self.actorCritic(newStates, newActionEmbeddings)
+        else:
+            currentStateValues, probs = self.actorCritic(currentStates)
+            newStateValues, _ = self.actorCritic(newStates)
 
         currentStateValues = currentStateValues.squeeze()
         newStateValues = newStateValues.squeeze().detach()
 
         # Calculate log probabilities and entropy
         dist = Categorical(probs)
-        logProbs = dist.log_prob(actions)
+        logProbs = dist.log_prob(actionIndexes)
         entropy = dist.entropy().mean()
 
         # Calculate targets and delta

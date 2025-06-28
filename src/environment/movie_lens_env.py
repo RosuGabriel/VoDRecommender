@@ -46,22 +46,26 @@ class MovieLensEnv(gym.Env):
     def step(self, action):
         self.stepCount += 1
 
-        movie_id = self.data.moviesDf.iloc[action]['movieId']
+        movieId = self.data.moviesDf.iloc[action]['movieId']
         
-        rating_row = self.userRatings[self.userRatings['movieId'] == movie_id]
+        rating_row = self.userRatings[self.userRatings['movieId'] == movieId]
         
         if rating_row.empty:
+            rating = None
             reward = 0.0  # not rated movie
         else:
-            reward = self._rating_to_reward(rating_row['rating'].values[0])
+            rating = rating_row['rating'].values[0]
+            reward = self._rating_to_reward(rating)
 
         if self.rarityBonus:
-            rarity = 1.0 - self.moviePopularity[movie_id]
+            rarity = 1.0 - self.moviePopularity[movieId]
             reward = reward * (1-self.rarityBonus) + rarity * self.rarityBonus
 
-        movieFeatures = np.array(self.data.get_movie_features(movie_id)[:19])
+        movieFeatures = np.array(self.data.get_movie_features(movieId)[:19])
         
-        self.userEmbedding = self.userEmbedding*(1-self.updateFactor) + movieFeatures * self.updateFactor * reward
+        if rating and rating >= 4.0:
+            self.userEmbedding = self.userEmbedding*(1-self.updateFactor) + movieFeatures * self.updateFactor * reward
+        
         self.userEmbeddings[self.userId] = self.userEmbedding
         
         done = self.stepCount >= self.maxSteps

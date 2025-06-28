@@ -29,7 +29,8 @@ class ActorCriticNet(nn.Module):
 
         self.actor_output = nn.Linear(pretrainedActor.action_layer_2.out_features, newActionsNum)
 
-        self.action_adapter = nn.Linear(newActionsNum, pretrainedCritic.critic_layer_1.out_features)
+        self.action_adapter = nn.Linear(newInDim, pretrainedCritic.critic_layer_1.out_features)
+        self.pi_adapter = nn.Linear(newActionsNum, pretrainedCritic.critic_layer_1.out_features)
 
         self.softmax = nn.Softmax(dim=-1)
 
@@ -60,13 +61,16 @@ class ActorCriticNet(nn.Module):
         v = None
         if action is None:
             action = pi
+            if len(action.shape) == 1:
+                action = action.unsqueeze(0)
+            action = self.pi_adapter(action)
+        else:
+            if len(action.shape) == 1:
+                action = action.unsqueeze(0)
+            action = self.action_adapter(action)
 
         if len(state.shape) == 1:
             state = state.unsqueeze(0)
-        if len(action.shape) == 1:
-            action = action.unsqueeze(0)
-
-        action = self.action_adapter(action)
 
         # Value from critic
         v = self.critic(state, action)

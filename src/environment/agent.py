@@ -63,18 +63,15 @@ class Agent:
             self.criticOptimizer = optim.Adam(self.criticParameters, lr=beta)
 
 
-    def choose_action(self, observation, temperature: float=1.0, actionsNum: int=1):
+    def choose_action(self, observation, temperature: float=1.0):
         state = torch.tensor(observation, dtype=torch.float32).to(self.device)
         
-        _, probs = self.actorCritic(state)
+        _, probs = self.actorCritic(state, justActor=True)
 
         logits = torch.log(probs + 1e-8)  # avoiding log(0)
         
-        if temperature == 1:
-            dist = Categorical(probs=probs)
-        else: # temperature > 1.0 more exploration | < 1.0 more exploitation
-            scaledLogits = logits / temperature
-            dist = Categorical(logits=scaledLogits)
+        scaledLogits = logits / temperature
+        dist = Categorical(logits=scaledLogits)
 
         action = dist.sample()
 
@@ -82,11 +79,7 @@ class Agent:
         
         self.actionHistory.append(action.item())
 
-        if actionsNum > 1:
-            #otherActions = torch.multinomial(torch.exp(scaledLogits), num_samples=actionsNum, replacement=False).tolist()
-            otherActions = torch.multinomial(probs, num_samples=actionsNum, replacement=False).tolist()
-
-        return action.item(), otherActions if actionsNum > 1 else None
+        return action.item(), probs if temperature == 1.0 else scaledLogits
 
 
     def add_to_batch(self, currentState, actionIndex, actionEmbedding, reward, newState, newActionEmbedding, done):
@@ -122,22 +115,25 @@ class Agent:
 
         currentStates = np.array(currentStates) 
         actionIndexes = np.array(actionIndexes)
-        actionEmbeddings = np.array(actionEmbeddings)
         rewards = np.array(rewards)
         newStates = np.array(newStates)
-        newActionEmbeddings = np.array(newActionEmbeddings)
         dones = np.array(dones)
 
         currentStates = torch.from_numpy(currentStates).float().to(self.device)
         actionIndexes = torch.from_numpy(actionIndexes).float().to(self.device)
-        actionEmbeddings = torch.from_numpy(actionEmbeddings).float().to(self.device)
         rewards = torch.from_numpy(rewards).float().to(self.device)
         newStates = torch.from_numpy(newStates).float().to(self.device)
-        newActionEmbeddings = torch.from_numpy(newActionEmbeddings).float().to(self.device)
         dones = torch.from_numpy(dones).float().to(self.device)
 
+        if not self.usePiForCritic:
+            actionEmbeddings = np.array(actionEmbeddings)
+            newActionEmbeddings = np.array(newActionEmbeddings)
+
+            actionEmbeddings = torch.from_numpy(actionEmbeddings).float().to(self.device)
+            newActionEmbeddings = torch.from_numpy(newActionEmbeddings).float().to(self.device)
+
         # State values
-        if self.usePiForCritic:
+        if not self.usePiForCritic:
             currentStateValues, probs = self.actorCritic(currentStates, actionEmbeddings)
             newStateValues, _ = self.actorCritic(newStates, newActionEmbeddings)
         else:

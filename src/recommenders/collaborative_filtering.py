@@ -10,13 +10,13 @@ from utils.paths import MODELS_DIR
 # Functions
 def train_recommender(data: MovieLensData, model, newModelName: str=None):
     # Reduce data size for smaller sparsity
-    print("Movies num:",data.moviesDf.shape)[0]
-    if data.data_sparsity() > 95:
+    print("Movies num:",data.moviesDf.shape[0])
+    if data.data_sparsity > 95:
         print("!Some movies will be eliminated in order to reduce sparsity!")
-        print(f"Sparsity: {data.data_sparsity()}% ->", end=' ')
+        print(f"Sparsity: {data.data_sparsity}% ->", end=' ')
         data.remove_movies_with_less_than_k_ratings(10)
-        print(f"{data.data_sparsity()}%")
-    print("Movies num:",data.moviesDf.shape)[0]
+        print(f"{data.data_sparsity}%")
+    print("Movies num:",data.moviesDf.shape[0])
     
     # Data converting to Surprise
     reader = Reader(rating_scale=[0.5, 5])
@@ -50,12 +50,12 @@ def get_recommendations(data: MovieLensData, userId: int, model, recomandationsN
 
 
 
-# #%%
+#%%
 # # Usage example
 # # Get data and model
 # data = MovieLensData(includeMyRatings=True)
 # trainedModel = train_recommender(data=data, model=SVD(n_epochs=2000, lr_all=0.001, reg_all=0.1, n_factors=100))
-# #%%
 
+# #%%
 # # Get recommendations
 # get_recommendations(data, 611, trainedModel, recomandationsNum=20)

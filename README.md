@@ -12,7 +12,7 @@ The project includes several recommendation techniques:
 
 ### 1. Collaborative Filtering
 
-📄 File: `src/recommenders/collaborative_filtering.py`  
+📄 File: `src/recommenders/collaborative_filtering.py`
 🔧 Library: `surprise` (SVD model)
 
 - Supports training a new model or loading one from a `.pkl` file.
@@ -77,6 +77,8 @@ get_recommendations(
 
 The agent is trained using **Advantage Actor-Critic**, where the policy (actor) and value function (critic) are updated together.
 
+![A2C Training Flow](images/A2CTraining.png)
+
 #### Advantage Function
 
 The temporal-difference (TD) advantage is computed as:
@@ -109,11 +111,13 @@ To efficiently process user profiles (observations) and actions, a **shared neur
   Receives both the state and the chosen action to evaluate the quality of that state-action combination.
 
 - **Shared Network Outputs:**
-  - **State Value (Critic):** The network estimates the value of the current state-action pair, representing how good the action is given the state.
   - **Policy Distribution (Actor):** The network outputs a probability distribution over possible actions (movies) for the Actor to select from.
+  - **State Value (Critic):** The network estimates the value of the current state-action pair, representing how good the action is given the state.
+
+![NN Architecture](images/ActorCriticNet.png)
 
 ## Training Progress
 
-Below is the training loss, advantage, average reward, state values, actions and entropy evolution over epochs:
+Below is the training loss, advantage, average reward, state values, actions and entropy evolution over training batches:
 
-![Training Plot](images/training.png)
+![Training Plot](images/trainingPlot.png)

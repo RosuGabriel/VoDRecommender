@@ -38,7 +38,7 @@ class ActorCriticNet(nn.Module):
         self.critic = pretrainedCritic
 
 
-    def forward(self, state, action=None):
+    def forward(self, state, action=None, justActor=False):
         # Adapt actor input
         if self.a_input_adapter:
             x = self.relu(self.a_input_adapter(state))
@@ -53,6 +53,9 @@ class ActorCriticNet(nn.Module):
 
         pi_logits = self.actor_output(x)
         pi = self.softmax(pi_logits)
+
+        if justActor:
+            return None, pi
 
         # Adapt critic input
         if self.c_input_adapter:

@@ -63,7 +63,7 @@ class MovieLensEnv(gym.Env):
 
         movieFeatures = np.array(self.data.get_movie_features(movieId)[:19])
         
-        if rating and rating >= 4.0:
+        if rating:
             self.userEmbedding = self.userEmbedding*(1-self.updateFactor) + movieFeatures * self.updateFactor * reward
         
         self.userEmbeddings[self.userId] = self.userEmbedding

@@ -10,6 +10,7 @@ import pandas as pd
 from utils.paths import ADDITIONAL_DIR, MOVIE_LENS_DIR, BASE_DIR
 from config_secrets import OMDb_API_KEY
 import threading
+import math
 
 
 
@@ -217,7 +218,7 @@ class RecommendationsFrame(ctk.CTkFrame):
 
 
     def display_movie(self, movieRow, index):
-        title = movieRow['title'] + f" ({int(movieRow['year'])})"
+        title = movieRow['title'] + f" ({int(movieRow['year']) if not math.isnan(movieRow['year']) else ''})"
         image = self.images.get(index)  # preloaded image
 
         imgLabel = ctk.CTkLabel(self.scrollFrame, image=image, text="")

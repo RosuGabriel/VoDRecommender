@@ -3,12 +3,14 @@ from data_loader.movie_lens_data import MovieLensData
 import gym
 import numpy as np
 import random
+from sklearn.metrics.pairwise import cosine_similarity
+import torch
 
 
 
 # Env definition
 class MovieLensEnv(gym.Env):
-    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100, repeatUsers=False, showInitialDetails=False, keepProfiles=False,
+    def __init__(self, data: MovieLensData=MovieLensData(), maxSteps=100, repeatUsers=False, useContinuousActions=False, showInitialDetails=False, keepProfiles=False,
                 updateFactor=0.2, rarityBonus = 0.2):
         super(MovieLensEnv, self).__init__()
         self.data = data
@@ -22,6 +24,9 @@ class MovieLensEnv(gym.Env):
         self.moviePopularity = data.movies_popularity
         self.updateFactor = updateFactor
         self.rarityBonus = rarityBonus
+        self.useContinuousActions = useContinuousActions
+        self.moviesEmbeddings = data.moviesFeatures.drop(['movieId', 'title', 'year'], axis=1)
+        self.moviesEmbeddings = self.moviesEmbeddings.iloc[:, :19]
 
         if showInitialDetails:
             print(f"Available users: {len(self.availableUsers)}")
@@ -30,7 +35,11 @@ class MovieLensEnv(gym.Env):
             
         self.reset()
         
-        self.action_space = gym.spaces.Discrete(len(self.data.moviesDf))
+        if useContinuousActions:
+            self.action_space = gym.spaces.Box(low=-5, high=5, shape=self.userEmbedding.shape, dtype=np.float32) # movie Embedding
+        else:
+            self.action_space = gym.spaces.Discrete(len(self.data.moviesDf)) # probability of each movie
+
         self.observation_space = gym.spaces.Box(low=-5, high=5, shape=self.userEmbedding.shape, dtype=np.float32) # approximative range of values
 
 
@@ -42,12 +51,41 @@ class MovieLensEnv(gym.Env):
         return np.array(self.userEmbedding), {"userId": self.userId,"userRatings": self.userRatings}
 
 
-    # The action is the index of the movie in the moviesDf
+    # Get reward for action and update user embedding
     def step(self, action):
         self.stepCount += 1
 
-        movieId = self.data.moviesDf.iloc[action]['movieId']
+        if self.useContinuousActions:
+            movieId = self.get_movieId_from_embedding(action)
+        else:
+            movieId = self.get_movieId_from_index(action)
+        movieFeatures = np.array(self.data.get_movie_features(movieId)[:19])
+    
+        reward = self.get_reward_for_movie(movieId)
         
+        # Update user embedding based on the reward
+        if reward:
+            self.userEmbedding = self.userEmbedding*(1-self.updateFactor) + movieFeatures * self.updateFactor * reward
+        
+        self.userEmbeddings[self.userId] = self.userEmbedding
+        
+        done = self.stepCount >= self.maxSteps
+        info = {"movieFeatures": movieFeatures, "movieId": movieId}
+
+        return np.array(self.userEmbedding), reward, done, info
+
+
+    def get_movieId_from_embedding(self, movieEmbedding):
+        similarities = cosine_similarity([movieEmbedding], self.moviesEmbeddings)[0]
+        movieIndex = similarities.argmax()
+        return self.data.moviesDf.iloc[movieIndex]['movieId']
+ 
+
+    def get_movieId_from_index(self, movieIndex):
+        return self.data.moviesDf.iloc[movieIndex]['movieId']
+    
+
+    def get_reward_for_movie(self, movieId):
         rating_row = self.userRatings[self.userRatings['movieId'] == movieId]
         
         if rating_row.empty:
@@ -61,17 +99,7 @@ class MovieLensEnv(gym.Env):
             rarity = 1.0 - self.moviePopularity[movieId]
             reward = reward * (1-self.rarityBonus) + rarity * self.rarityBonus
 
-        movieFeatures = np.array(self.data.get_movie_features(movieId)[:19])
-        
-        if rating:
-            self.userEmbedding = self.userEmbedding*(1-self.updateFactor) + movieFeatures * self.updateFactor * reward
-        
-        self.userEmbeddings[self.userId] = self.userEmbedding
-        
-        done = self.stepCount >= self.maxSteps
-        info = {"movieFeatures": movieFeatures}
-
-        return np.array(self.userEmbedding), reward, done, info
+        return reward
 
 
     def render(self, mode='human'):

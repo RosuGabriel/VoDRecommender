@@ -2,24 +2,30 @@
 import torch
 import torch.optim as optim
 from torch.distributions import Categorical
+from models.PretrainedContinuousActorCriticNet import PretrainedContinuousActorCriticNet
+from models.PretrainedActorCriticNet import PretrainedActorCriticNet
 from models.ActorCriticNet import ActorCriticNet
 import matplotlib.pyplot as plt
 import numpy as np
 import random
+import math
 
 
 
 class Agent:
-    def __init__(self, alpha=0.0001, beta=None, gamma=0.99, actionsNum=2, observationDim=19, device=None, pretrainedActor=None,
-                 pretrainedCritic=None, batchSize=32, usePiForCritic=False):
+    def __init__(self, alpha=0.0001, beta=None, gamma=0.99, actionDim=2, observationDim=19, device=None, pretrainedActor=None,
+                 pretrainedCritic=None, batchSize=32, usePiForCritic=False, useContinuousActions=False):
         self.gamma = gamma
-        self.actionsNum = actionsNum
+        self.actionsNum = actionDim
         self.action = None
         self.batchSize = batchSize
         self.batch = []
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.separateOptimizers = False
         self.usePiForCritic = usePiForCritic
+
+        if useContinuousActions:
+            actionDim = observationDim
 
         self.actorLossHistory = []
         self.totalLossHistory = []
@@ -32,8 +38,17 @@ class Agent:
         self.entropyHistory = []
         
         # Actor-Critic network
-        self.actorCritic = ActorCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionsNum).to(self.device)
-     
+        if pretrainedActor is None or pretrainedCritic is None:
+            pretrainedModels = False
+            self.actorCritic = ActorCriticNet(stateDim=observationDim, actionDim=actionDim, hiddenSize=observationDim*2).to(self.device)
+        elif useContinuousActions:
+            pretrainedModels = True
+            self.actorCritic = PretrainedContinuousActorCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionDim).to(self.device)
+        else:
+            pretrainedModels = True
+            self.actorCritic = PretrainedActorCriticNet(pretrainedActor, pretrainedCritic, newInDim=observationDim, newActionsNum=actionDim).to(self.device)
+
+
         # Optimizer type
         if beta is None:
             # Shared optimizer
@@ -43,19 +58,27 @@ class Agent:
 
             # Actor parameters
             self.actorParameters = []
-            if self.actorCritic.a_input_adapter:
+            if pretrainedModels and self.actorCritic.a_input_adapter:
                 self.actorParameters += list(self.actorCritic.a_input_adapter.parameters())
 
-            self.actorParameters += list(self.actorCritic.actor_fc1.parameters())
-            self.actorParameters += list(self.actorCritic.actor_fc2.parameters())
-            self.actorParameters += list(self.actorCritic.actor_output.parameters())
+                self.actorParameters += list(self.actorCritic.actor_fc1.parameters())
+                self.actorParameters += list(self.actorCritic.actor_fc2.parameters())
+                if self.actorCritic.actor_output:
+                    self.actorParameters += list(self.actorCritic.actor_output.parameters())
+                else:
+                    self.actorParameters += list(self.actorCritic.mean1.parameters())
+                    self.actorParameters += list(self.actorCritic.std1.parameters())
+                    self.actorParameters += list(self.actorCritic.mean2.parameters())
+                    self.actorParameters += list(self.actorCritic.std2.parameters())
+            else:
+                self.actorParameters += list(self.actorCritic.actor.parameters())
 
             # Critic parameters
             self.criticParameters = []
-            if self.actorCritic.c_input_adapter:
+            if pretrainedModels and self.actorCritic.c_input_adapter:
                 self.criticParameters += list(self.actorCritic.c_input_adapter.parameters())
+                self.criticParameters += list(self.actorCritic.action_adapter.parameters())
 
-            self.criticParameters += list(self.actorCritic.action_adapter.parameters())
             self.criticParameters += list(self.actorCritic.critic.parameters())
 
             # Optimizer for each component
@@ -80,6 +103,11 @@ class Agent:
         self.actionHistory.append(action.item())
 
         return action.item(), probs if temperature == 1.0 else scaledLogits
+    
+
+    def choose_action_continuous(self, observation):
+        state = torch.tensor(observation, dtype=torch.float32).to(self.device)
+        return self.actorCritic(state, justAction=True).detach().cpu().numpy()
 
 
     def add_to_batch(self, currentState, actionIndex, actionEmbedding, reward, newState, newActionEmbedding, done):
@@ -132,10 +160,10 @@ class Agent:
             actionEmbeddings = torch.from_numpy(actionEmbeddings).float().to(self.device)
             newActionEmbeddings = torch.from_numpy(newActionEmbeddings).float().to(self.device)
 
-        # State values
-        if not self.usePiForCritic:
+            # State values
             currentStateValues, probs = self.actorCritic(currentStates, actionEmbeddings)
             newStateValues, _ = self.actorCritic(newStates, newActionEmbeddings)
+        
         else:
             currentStateValues, probs = self.actorCritic(currentStates)
             newStateValues, _ = self.actorCritic(newStates)
@@ -188,8 +216,85 @@ class Agent:
         self.entropyHistory.append(entropy.item())
 
         return entropy.item()
-
     
+
+    def calculate_logProbs(self, mu, std, actionEmbeddings):
+        p1 = - ((mu-actionEmbeddings) ** 2) / (2 * std)
+        p2 = - torch.log(torch.sqrt(2 * np.pi * std))
+        return p1 + p2
+    
+
+    def learn_continuous(self, entropyCoef=0.01, batchSampleSize=32, recentExperienceRatio=0.25):
+        if len(self.batch) == 0:
+            return
+
+        currentStates, actionsIds, actionEmbeddings, rewards, newStates, newActionEmbeddings, dones = self.sample_batch(batchSampleSize=batchSampleSize, recentExperienceRatio=recentExperienceRatio)
+
+        currentStates = np.array(currentStates)
+        rewards = np.array(rewards)
+        newStates = np.array(newStates)
+        actionEmbeddings = np.array(actionEmbeddings)
+        newActionEmbeddings = np.array(newActionEmbeddings)
+        dones = np.array(dones)
+
+        currentStates = torch.from_numpy(currentStates).float().to(self.device)
+        rewards = torch.from_numpy(rewards).float().to(self.device)
+        newStates = torch.from_numpy(newStates).float().to(self.device)
+        actionEmbeddings = torch.from_numpy(actionEmbeddings).float().to(self.device)
+        newActionEmbeddings = torch.from_numpy(newActionEmbeddings).float().to(self.device)
+        dones = torch.from_numpy(dones).float().to(self.device)
+
+        currentStateValues, _, mu, std = self.actorCritic(currentStates, actionEmbeddings)
+        newStateValues, _, _, _ = self.actorCritic(newStates, newActionEmbeddings)
+
+        currentStateValues = currentStateValues.squeeze()
+        newStateValues = newStateValues.squeeze().detach()
+
+        # Calculate log probabilities and entropy
+        logProbs = self.calculate_logProbs(mu, std, actionEmbeddings).sum(dim=1)
+        entropy = (-(torch.log(2*math.pi*std)+1)/2).sum(dim=1).mean()
+
+        # Calculate targets and delta
+        targets = rewards + self.gamma * newStateValues * (1 - dones)
+        delta = targets - currentStateValues
+        
+        # Losses
+        criticLoss = delta.pow(2).mean()
+        actorLoss = (-logProbs * delta.detach()).mean()
+
+        # Entropy bonus on actor loss
+        actorLoss = actorLoss - entropyCoef * entropy
+
+        totalLoss = criticLoss + actorLoss
+
+        # Backward
+        if self.separateOptimizers:
+            self.criticOptimizer.zero_grad()
+            criticLoss.backward(retain_graph=True)
+            torch.nn.utils.clip_grad_norm_(self.criticParameters, max_norm=0.5)
+            self.criticOptimizer.step()
+
+            self.actorOptimizer.zero_grad()
+            actorLoss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actorParameters, max_norm=0.5)
+            self.actorOptimizer.step()
+        else:
+            self.optimizer.zero_grad()
+            totalLoss.backward()
+            torch.nn.utils.clip_grad_norm_(self.actorCritic.parameters(), max_norm=0.5)
+            self.optimizer.step()
+
+        # Add to history for plot
+        self.actorLossHistory.append(actorLoss.item())
+        self.totalLossHistory.append(totalLoss.item())
+        self.criticLossHistory.append(criticLoss.item())
+        self.deltaHistory.append(delta.mean().item())
+        self.stateValueHistory.append(currentStateValues.mean().item())
+        self.entropyHistory.append(entropy.item())
+
+        return entropy.item()
+    
+
     def save_models(self, fileName: str=None):
         print('... saving models ...')
         if not fileName:

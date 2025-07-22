@@ -34,7 +34,6 @@ runs/
 # Models
 checkpoints/
 *.h5
-*.pt
 *.pth
 *.ckpt
 *.onnx
@@ -71,4 +70,4 @@ docker-compose.override.yml
 tmp/
 
 # Data too large to be in the repo
-additional_data/
+data/

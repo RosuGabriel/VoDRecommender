@@ -14,20 +14,21 @@ import numpy as np
 #%%
 # Trainging parameters
 steps = 3 # recommendations per userId
-episodes = 610*60 # number of users getting recommendations
-alpha = 0.0009 # learning rate
-beta  = 0.0001 # learning rate for critic, if None then shared optimizer is used
+episodes = 610*30 # number of users getting recommendations
+alpha = 0.005 # learning rate
+beta  = 0.001 # learning rate for critic, if None then shared optimizer is used
 gamma = 0.99 # discount factor
 device = torch.device('cuda') # device to use for learning (cuda or cpu)
 bufferSize = 256 # training batch size
 batchSize = 10000 # the total batch size for sampling
 repeatUsers = True # repeat users in env or remove once used
-stateUpdateFactor = 0.2
+stateUpdateFactor = 0.1
 recentExperienceRatio = 0.5
-keepProfiles = True
+keepProfiles = False
 usePiForCritic = True # use actor's pi for critic or selected action embedding
+usePretrainedModels = True # use pretrained models or train from scratch
 # Entropy parameters
-initialEntropyCoef = 0.05 # entropy coefficient
+initialEntropyCoef = 0.3 # entropy coefficient
 maxEntropy = 15
 # Temperature parameters
 initialTemperature = 1.2
@@ -36,8 +37,8 @@ useTemperatureDecay = False
 repeatedActionPenalty = 0.2 # penalty for repeated actions
 newActionBonus = 0.2 # bonus for new actions
 betterActionBonus = 0.15
-rarityBonus = 0.2
-entropyThreshold = 7.5
+rarityBonus = 0
+useContinuousActions = True
 
 loadAgentName = None
 saveName=f"{steps}_{episodes}_{alpha}_{beta}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}"
@@ -50,16 +51,21 @@ data = MovieLensData(includeEstimatedRatings=True)
 
 #%%
 # Create environment
-env = MovieLensEnv(maxSteps=steps, data=data, repeatUsers=repeatUsers, keepProfiles=keepProfiles, updateFactor=stateUpdateFactor, rarityBonus=rarityBonus)
+env = MovieLensEnv(maxSteps=steps, data=data, repeatUsers=repeatUsers, keepProfiles=keepProfiles, updateFactor=stateUpdateFactor, rarityBonus=rarityBonus, useContinuousActions=useContinuousActions)
 
 
 #%%
 # Create agent
-actorModelName = "actor_10May0028.pt"
-pretrainedActorModel = torch.load(BASE_DIR / f"models/pretrained/{actorModelName}")
-criticModelName = "critic_10May0028.pt"
-pretrainedCriticModel = torch.load(BASE_DIR / f"models/pretrained/{criticModelName}")
-agent = Agent(alpha=alpha, beta=beta, gamma=gamma, usePiForCritic=usePiForCritic, actionsNum=env.action_space.n, observationDim=env.observation_space.shape[0], device=device, batchSize=batchSize, pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel)
+actionDim = env.action_space.n if not useContinuousActions else env.action_space.shape[0]
+observationDim = env.observation_space.shape[0]
+if usePretrainedModels:
+    actorModelName = "actor_10May0028.pt"
+    pretrainedActorModel = torch.load(BASE_DIR / f"models/pretrained/{actorModelName}")
+    criticModelName = "critic_10May0028.pt"
+    pretrainedCriticModel = torch.load(BASE_DIR / f"models/pretrained/{criticModelName}")
+    agent = Agent(alpha=alpha, beta=beta, gamma=gamma, usePiForCritic=usePiForCritic, actionDim=actionDim, observationDim=observationDim, device=device, batchSize=batchSize, pretrainedActor=pretrainedActorModel, pretrainedCritic=pretrainedCriticModel, useContinuousActions=useContinuousActions)
+else:
+    agent = Agent(alpha=alpha, beta=beta, gamma=gamma, usePiForCritic=usePiForCritic, actionDim=actionDim, observationDim=observationDim, device=device, batchSize=batchSize, useContinuousActions=useContinuousActions)
 
 if loadAgentName:
     agent.load_models(fileName=loadAgentName)
@@ -76,7 +82,7 @@ avgScores = []
 #%%
 # Train function
 def train():
-    global bestScore, temperature, maxEntropy, recentExperienceRatio, entropyThreshold
+    global bestScore, temperature, maxEntropy, recentExperienceRatio
     startTime = time.time()
     episode = 0
     avgScore = minimumReward
@@ -137,7 +143,6 @@ def train():
             episode += 1
 
             progress = episode / episodes
-            
             avgEntropy = np.mean(agent.entropyHistory[-100:])
 
             entropy = agent.learn(entropyCoef=entropyCoef, maxEntropy=maxEntropy, batchSampleSize=bufferSize, recentExperienceRatio=recentExperienceRatio)
@@ -166,9 +171,94 @@ def train():
 
 
 #%%
+# Train on continuous actions
+def train_continuous():
+    global bestScore, recentExperienceRatio
+    startTime = time.time()
+    episode = 0
+    avgScore = minimumReward
+    entropyCoef = initialEntropyCoef
+    progress = 0.0
+
+
+    for _ in range(episodes+bufferSize):
+        observation, obsInfo = env.reset()
+        
+        done = False
+        score = 0
+        
+        while not done:
+            actionEmbedding = agent.choose_action_continuous(observation)
+            newObservation, reward, done, info = env.step(actionEmbedding)
+            
+            movieId = info["movieId"]
+            actionEmbedding = info["movieFeatures"]
+
+            agent.actionHistory.append(movieId)
+            
+            # Penalty for repeating actions
+            frequency = agent.actionHistory[steps*-10:].count(movieId)
+            reward = max(reward - repeatedActionPenalty*frequency, minimumReward)
+
+            frequency = agent.actionHistory[steps*-100:steps*-10].count(movieId)
+            reward = max(reward - repeatedActionPenalty/10*frequency, minimumReward)
+
+            # Use bonus when batch is filled
+            if len(agent.batch) > bufferSize and reward > 0:
+                # Bonus for new actions
+                if movieId not in agent.actionHistory[steps*-500:]:
+                    reward += reward * newActionBonus
+                # Bonus for better actions
+                if reward > avgScore:
+                    reward += reward * betterActionBonus * progress
+            
+            score += reward
+
+            newActionEmbedding = agent.choose_action_continuous(newObservation)
+            newMovieId = env.get_movieId_from_embedding(newActionEmbedding)
+            newActionEmbedding = np.array(data.get_movie_features(newMovieId)[:19])
+                
+            agent.add_to_batch(observation, movieId, actionEmbedding, reward, newObservation, newActionEmbedding, done)
+            observation = newObservation
+                        
+        if len(agent.batch) >= bufferSize:
+            episode += 1
+
+            progress = episode / episodes
+            #avgEntropy = np.mean(agent.entropyHistory[-100:])
+            
+            agent.learn_continuous(entropyCoef=entropyCoef, batchSampleSize=bufferSize, recentExperienceRatio=recentExperienceRatio)
+
+            score = score / steps
+
+            scoreHistory.append(score)
+            avgScore = sum(scoreHistory) / len(scoreHistory) if scoreHistory else minimumReward
+            avgScores.append(avgScore)
+
+            if avgScore > bestScore and progress > 0.15:
+                bestScore = avgScore
+                agent.save_models(fileName=saveName)
+            if not episode % 25:
+                print(f"Progress {progress*100:.2f}%\tEpisode {episode}\tScore: {score:.3f}\tAvg score: {avgScore:.3f}")
+                print(f"RecentExperienceRatio {recentExperienceRatio:.3f}")
+
+
+    endTime = time.time()
+    print(f"Execution time: {endTime - startTime:.2f} seconds")
+    print(f"Best score: {bestScore:.2f}")
+    print(saveName)
+    print(f"Best avg. rating: {env.reward_to_rating(bestScore):.2f} stars")
+
+    return bestScore, avgScores
+
+#%%
 # Train
 saveName=f"{steps}_{episodes}_{alpha}_{beta}_{gamma}_{time.strftime('%d-%m-%Y_%H-%M')}"
-bestScore, avgScores = train()
+#torch.autograd.set_detect_anomaly(True)
+if useContinuousActions:
+    bestScore, avgScores = train_continuous()
+else:
+    bestScore, avgScores = train()
 
 #%%
 # Plot the results
